@@ -18,3 +18,21 @@ use the extractor's page units (usually PDF points), and are not rendered pixels
 Older runs use their stored parsed artifact, exposing visual crop boxes only.
 A new run is needed to capture their full Docling text/layout regions. The viewer
 uses blank page outlines and does not expose original unredacted PDF content.
+
+## Validate against the original PDF
+
+Open **Ingestion monitor → Details → Open PDF inspector**. The dedicated page
+renders the retained source PDF locally, then draws selectable SVG boxes over it.
+Use the page selector, 100–200% zoom, and layer selector (all, Docling layout,
+processing crops, or original only). Click a box or its object-list entry to
+highlight it and compare its edges with the content. Blue identifies Docling
+layout records; orange identifies processing crops. Check that boxes include the
+complete text/table/figure and exclude unrelated nearby content. Scan tiles are
+intentional overlapping regions, not individual semantic objects.
+
+Original pages require folder maker/checker/owner/delegate entitlement **and**
+`pii_unmasked`; E001 currently qualifies. Page access is audited. Existing runs
+only contain their previously persisted crop geometry; full text-region layout
+requires a new parse. The source PDF is rendered locally with PDFium, with no
+model call. The original stays unchanged. Annotated PDF downloads are also
+available from the geometry panel.

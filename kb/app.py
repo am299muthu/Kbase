@@ -423,6 +423,64 @@ def pdf_layout(request_id: str, user=Depends(user_context), db=Depends(connectio
     raise HTTPException(404, 'No geometry snapshot for this run. Snapshots are captured on new PDF runs after parsing completes.')
 
 
+@app.get('/api/processing-requests/{request_id}/pdf-layout/annotated.pdf')
+def annotated_pdf(request_id: str, layer: str = 'all', user=Depends(user_context), db=Depends(connection)):
+    if not user.pii_unmasked:
+        raise HTTPException(403, 'Original PDF content requires unmasked-content permission. Geometry JSON remains available.')
+    if layer not in {'all', 'layout', 'crops'}:
+        raise HTTPException(400, 'Choose all, layout or crops.')
+    geometry = pdf_layout(request_id, user, db)
+    request = db.get(ProcessingRequest, request_id)
+    document = db.get(Document, request.document_id)
+    if not document.title.lower().endswith('.pdf'):
+        raise HTTPException(400, 'PDF source required.')
+    from kb.pdf_debug import annotate_pdf
+    with tempfile.TemporaryDirectory() as temp:
+        source = Path(temp) / 'source.pdf'
+        # Use the original retained for this exact processing run.
+        ObjectStore().fetch(f'raw/{document.folder_id}/{document.id}/{request.id}/original.pdf', source)
+        content = annotate_pdf(source, geometry['objects'], layer)
+    entitled(db, user.id, document.folder_id, {'maker', 'checker', 'owner', 'delegate'})
+    db.refresh(user)
+    if not user.pii_unmasked:
+        raise HTTPException(403, 'Unmasked-content permission was revoked.')
+    audit(db, user.id, 'ingestion.pdf_debug_download', document.id, {'request_id': request.id, 'layer': layer})
+    return Response(content, media_type='application/pdf', headers={
+        'Content-Disposition': f'attachment; filename="pdf-layout-{request.id}-{layer}.pdf"',
+        'Cache-Control': 'no-store'})
+
+
+@app.get('/api/processing-requests/{request_id}/pdf-layout/page/{page_number}')
+def pdf_debug_page(request_id: str, page_number: int, user=Depends(user_context), db=Depends(connection)):
+    if not user.pii_unmasked:
+        raise HTTPException(403, 'Original PDF content requires unmasked-content permission.')
+    pdf_layout(request_id, user, db)
+    request = db.get(ProcessingRequest, request_id)
+    document = db.get(Document, request.document_id)
+    import io
+    import pypdfium2 as pdfium
+    with tempfile.TemporaryDirectory() as temp:
+        source = Path(temp) / 'source.pdf'
+        ObjectStore().fetch(f'raw/{document.folder_id}/{document.id}/{request.id}/original.pdf', source)
+        with pdfium.PdfDocument(str(source)) as pdf:
+            if not 1 <= page_number <= len(pdf):
+                raise HTTPException(404, 'Page not found.')
+            page = pdf[page_number-1]
+            width, height = page.get_size()
+            scale = min(1.5, 1800 / max(width, height))
+            bitmap = page.render(scale=scale)
+            output = io.BytesIO()
+            bitmap.to_pil().save(output, format='PNG')
+            bitmap.close()
+            page.close()
+    entitled(db, user.id, document.folder_id, {'maker', 'checker', 'owner', 'delegate'})
+    db.refresh(user)
+    if not user.pii_unmasked:
+        raise HTTPException(403, 'Unmasked-content permission was revoked.')
+    audit(db, user.id, 'ingestion.pdf_debug_page', document.id, {'request_id': request.id, 'page': page_number})
+    return Response(output.getvalue(), media_type='image/png', headers={'Cache-Control':'no-store'})
+
+
 @app.get('/api/ingestion')
 def ingestion_status(user=Depends(user_context), db=Depends(connection)):
     """Per-document ingestion monitor: latest request, stage and failure diagnostics."""

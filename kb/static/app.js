@@ -3,7 +3,7 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const state = { user: null, folders: [], documents: [], employees: [], events: [], view: 'ask', folderId: null, health: null, epoch: 0, chatBusy: false, chatGeneration: 0 };
-  const viewNames = { ask: 'Ask knowledge', library: 'Document library', approvals: 'Approvals', ingestion: 'Ingestion monitor', access: 'Folders & access', audit: 'Activity log' };
+  const viewNames = { ask: 'Ask knowledge', library: 'Document library', approvals: 'Approvals', ingestion: 'Ingestion monitor', pdfdebug: 'PDF object inspector', access: 'Folders & access', audit: 'Activity log' };
   let toastTimer;
   let dialogBusy = false;
   let loginLoaded = false;
@@ -222,6 +222,8 @@
     state.chatGeneration++;
     state.chatBusy = false;
     state.user = null;
+    $('pdfdebug-content').replaceChildren();
+    delete $('pdfdebug-content').dataset.loaded;
     state.folders = [];
     state.documents = [];
     state.employees = [];
@@ -322,6 +324,7 @@
     }
     if (next === 'library') renderDocuments();
     if (next === 'approvals') renderApprovals();
+    if (next === 'pdfdebug' && !$('pdfdebug-content').dataset.loaded) loadPdfChoices().catch(alertError);
     window.clearInterval(ingestionTimer); ingestionTimer = null;
     if (next === 'ingestion') { refreshIngestion().catch(alertError); ingestionTimer = window.setInterval(() => { if (state.user && state.view === 'ingestion' && !document.hidden) refreshIngestion().catch(() => {}); }, 5000); }
     if (next === 'access') { renderFolders(); if (state.folderId) selectFolder(state.folderId); }
@@ -841,6 +844,66 @@
       refreshDocuments().catch(() => {});
     }).catch(alertError);
   }
+  async function loadPdfChoices() {
+    const host=$('pdfdebug-content');
+    const data=await api('/api/ingestion');
+    if (host.dataset.loaded) return;
+    host.replaceChildren(el('p','','Choose an ingestion run to inspect its PDF:'));
+    for(const item of data.items.filter(i=>i.request_id && /\.pdf$/i.test(i.title))) {
+      const choose=button(`${item.title} · ${item.stage}`, 'button secondary');
+      choose.addEventListener('click',()=>openPdfInspector(item).catch(alertError));host.append(choose);
+    }
+  }
+  async function openPdfInspector(item) {
+    const host = $('pdfdebug-content');
+    host.dataset.loaded='1';
+    host.replaceChildren(el('p', '', 'Loading PDF geometry…'));
+    const data = await api(`/api/processing-requests/${encodeURIComponent(item.request_id)}/pdf-layout`);
+    host.replaceChildren(el('h2', '', item.title));
+    if (!state.user?.pii_unmasked) {
+      host.append(el('p', 'inline-error', 'Viewing original PDF content requires unmasked-content permission. Use an authorized account such as Alex Demo1 (E001). Geometry remains available in ingestion Details.'));
+      return;
+    }
+    if (data.coverage) host.append(el('p', 'muted', data.coverage));
+    const pages = [...new Set(data.objects.map(o => o.page))].sort((a,b) => a-b);
+    if (!pages.length) { host.append(el('p', '', 'No boxes were recorded for this run.')); return; }
+    const toolbar = el('div','pdf-debug-toolbar');
+    const pageSelect = el('select'); pageSelect.setAttribute('aria-label','PDF page');
+    pages.forEach(n => { const o=el('option','',`Page ${n}`); o.value=n; pageSelect.append(o); });
+    const layer = el('select'); layer.setAttribute('aria-label','Object layer');
+    [['all','All boxes'],['layout','Docling layout'],['crops','Processing crops'],['none','Original page only']].forEach(([value,label]) => {const o=el('option','',label);o.value=value;layer.append(o);});
+    const zoom = el('select'); zoom.setAttribute('aria-label','Zoom');
+    [100,150,200].forEach(n => {const o=el('option','',`${n}%`);o.value=n;zoom.append(o);});
+    toolbar.append(pageSelect,layer,zoom);host.append(toolbar);
+    const split=el('div','pdf-debug-split'), scroll=el('div','pdf-debug-scroll'), stage=el('div','pdf-debug-stage'), side=el('div','pdf-debug-objects');
+    scroll.append(stage);split.append(scroll,side);host.append(split);
+    let selected=null;
+    const draw = () => {
+      stage.replaceChildren();side.replaceChildren();stage.style.width=`${zoom.value}%`;
+      const objects=data.objects.filter(o=>String(o.page)===pageSelect.value);
+      const b=objects[0].bbox;
+      const img=el('img');img.alt=`Original PDF page ${pageSelect.value}`;
+      img.src=`/api/processing-requests/${encodeURIComponent(item.request_id)}/pdf-layout/page/${pageSelect.value}`;
+      img.addEventListener('error',()=>{side.prepend(el('p','inline-error','Could not load the original PDF page. Check access and storage availability.'));});
+      stage.append(img);
+      const ns='http://www.w3.org/2000/svg'; const svg=document.createElementNS(ns,'svg');
+      svg.setAttribute('viewBox',`0 0 ${b.page_width} ${b.page_height}`);svg.setAttribute('preserveAspectRatio','none');svg.classList.add('pdf-debug-overlay');stage.append(svg);
+      objects.forEach((obj,i)=>{
+        const isLayout=obj.extractor==='docling-layout';
+        if(layer.value==='none'||(layer.value==='layout'&&!isLayout)||(layer.value==='crops'&&isLayout))return;
+        const box=obj.bbox,color=isLayout?'#2563eb':'#d97706';
+        const rect=document.createElementNS(ns,'rect');
+        for(const [k,v] of Object.entries({x:box.left,y:box.top,width:box.right-box.left,height:box.bottom-box.top,fill:selected===obj.object_id?'#fde047':'transparent','fill-opacity':selected===obj.object_id?'.22':'0',stroke:color,'stroke-width':selected===obj.object_id?3:1}))rect.setAttribute(k,v);
+        rect.style.pointerEvents='all';rect.style.cursor='pointer';rect.addEventListener('click',()=>{selected=obj.object_id;draw();});svg.append(rect);
+        const label=document.createElementNS(ns,'text');label.setAttribute('x',box.left+2);label.setAttribute('y',Math.min(box.top+11,b.page_height-2));label.setAttribute('font-size','10');label.setAttribute('fill',color);label.setAttribute('stroke','white');label.setAttribute('stroke-width','2');label.setAttribute('paint-order','stroke');label.textContent=`${i+1} ${obj.object_kind}`;svg.append(label);
+        const entry=button(`${i+1}. ${obj.object_kind}`, 'button secondary');entry.addEventListener('click',()=>{selected=obj.object_id;draw();});
+        const card=el('div','pdf-debug-object');if(selected===obj.object_id)card.classList.add('selected');
+        card.append(entry,el('p','muted',obj.extractor),el('code','',obj.object_id),el('pre','',JSON.stringify(box,null,2)));side.append(card);
+      });
+    };
+    [pageSelect,layer,zoom].forEach(control=>control.addEventListener('change',draw));draw();
+  }
+
   function openIngestionDetails(item) {
     const body = openDialog('Ingestion details', 'PROCESSING TRACE');
     body.append(el('h3', '', `${item.title} · v${item.version}`));
@@ -850,6 +913,12 @@
     }
     body.append(info);
     if (item.request_id && /\.pdf$/i.test(item.title)) {
+      const inspect = button('Open PDF inspector', 'button primary');
+      inspect.addEventListener('click', () => {
+        $('form-dialog').close(); location.hash = 'pdfdebug';
+        openPdfInspector(item).catch(alertError);
+      });
+      body.append(inspect);
       const debug = button('PDF bounding boxes', 'button secondary');
       const panel = el('div');
       debug.addEventListener('click', () => busy(debug, async () => {
@@ -886,7 +955,14 @@
           const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], {type:'application/json'}));
           const a = el('a'); a.href = url; a.download = `pdf-layout-${item.request_id}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
         });
-        panel.append(download); draw();
+        panel.append(download);
+        panel.append(el('p', 'muted', 'Validate against original pages: blue = Docling layout, orange = processing crops. Numbers match this view. Original-content permission is required.'));
+        for (const [layer, label] of [['all','Download annotated PDF'],['layout','Docling layout only'],['crops','Processing crops only']]) {
+          const link = el('a', 'button secondary', label);
+          link.href = `/api/processing-requests/${encodeURIComponent(item.request_id)}/pdf-layout/annotated.pdf?layer=${layer}`;
+          link.target = '_blank'; link.rel = 'noopener'; panel.append(link);
+        }
+        draw();
       }).catch(alertError));
       body.append(debug, panel);
     }
