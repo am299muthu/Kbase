@@ -1,0 +1,47 @@
+name: Build and MCP smoke
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  local-prototype:
+    runs-on: ubuntu-latest
+    env:
+      # Explicit offline adapter for this smoke job; runtime defaults to OpenSearch.
+      SEARCH_BACKEND: sqlite
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile and seed synthetic fixtures
+        run: |
+          python -m compileall -q kb
+          node --check kb/static/app.js
+          python -m kb.cli init --demo-documents
+      - name: Discover and call MCP tools
+        run: python -m kb.cli mcp-check
+      - name: Launch API and check health
+        shell: bash
+        run: |
+          python -m kb.cli serve > /tmp/kbase-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl -fsS http://127.0.0.1:8000/ > /dev/null; then break; fi
+            sleep 1
+          done
+          python - <<'PY'
+          import json, urllib.request
+          with urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=30) as response:
+              health = json.load(response)
+          assert health['status'] == 'ok', health
+          assert health['services']['mcp']['tools'] >= 5, health
+          print(json.dumps(health))
+          PY

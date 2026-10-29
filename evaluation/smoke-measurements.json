@@ -1,0 +1,294 @@
+{
+  "measured_at": "2026-10-26T08:16:29.874191+00:00",
+  "scope": "16 selected synthetic cases, local SQLite lexical/extractive mode; no external model calls; warm web app and fresh MCP process per chat. Not full 50-case quality evaluation.",
+  "metrics": {
+    "latency_p50_ms": 578.81,
+    "latency_p95_nearest_rank_ms": 601.51,
+    "citation_id_integrity_passes": 16,
+    "tool_coverage_passes": 16,
+    "semantic_groundedness": null,
+    "semantic_citation_accuracy": null,
+    "human_answer_quality": null
+  },
+  "cases": [
+    {
+      "id": "Q001",
+      "category": "straightforward_policy",
+      "top_k": 5,
+      "latency_ms": 601.51,
+      "keyword_proxy_pass": true,
+      "tool_coverage_pass": true,
+      "expected_escalation_match": true,
+      "actual_escalation": null,
+      "citations": 3,
+      "citation_id_integrity": true,
+      "sources": [
+        "retail-banking-escalation.md",
+        "retail-banking-policy.md",
+        "synthetic-retail-policy.docx"
+      ]
+    },
+    {
+      "id": "Q006",
+      "category": "straightforward_policy",
+      "top_k": 5,
+      "latency_ms": 597.55,
+      "keyword_proxy_pass": true,
+      "tool_coverage_pass": true,
+      "expected_escalation_match": true,
+      "actual_escalation": null,
+      "citations": 3,
+      "citation_id_integrity": true,
+      "sources": [
+        "technology-policy.md"
+      ]
+    },
+    {
+      "id": "Q010",
+      "category": "straightforward_policy",
+      "top_k": 5,
+      "latency_ms": 586.66,
+      "keyword_proxy_pass": true,
+      "tool_coverage_pass": true,
+      "expected_escalation_match": true,
+      "actual_escalation": null,
+      "citations": 3,
+      "citation_id_integrity": true,
+      "sources": [
+        "risk-compliance-policy.md"
+      ]
+    },
+    {
+      "id": "Q013",
+      "category": "straightforward_policy",
+      "top_k": 5,
+      "latency_ms": 584.91,
+      "keyword_proxy_pass": true,
+      "tool_coverage_pass": true,
+      "expected_escalation_match": true,
+      "actual_escalation": null,
+      "citations": 2,
+      "citation_id_integrity": true,
+      "sources": [
+        "finance-policy.md"
+      ]
+    },
+    {
+      "id": "Q017",
+      "category": "straightforward_policy",
+      "top_k": 5,
+      "latency_ms": 582.2,
+      "keyword_proxy_pass": true,
+      "tool_coverage_pass": true,
+      "expected_escalation_match": true,
+      "actual_escalation": null,
+      "citations": 2,
+      "citation_id_integrity": true,
+      "sources": [
+        "people-policy.md"
+      ]
+    },
+    {
+      "id": "Q021",
+      "category": "multi_document",
+      "top_k": 5,
+      "latency_ms": 595.53,
+      "keyword_proxy_pass": true,
+      "tool_coverage_pass": true,
+      "expected_escalation_match": true,
+      "actual_escalation": null,
+      "citations": 5,
+      "citation_id_integrity": true,
+      "sources": [
+        "retail-banking-escalation.md",
+        "retail-banking-policy.md",
+        "synthetic-retail-policy.docx"
+      ]
+    },
+    {
+      "id": "Q025",
+      "category": "multi_document",
+      "top_k": 5,
+      "latency_ms": 596.89,
+      "keyword_proxy_pass": true,
+      "tool_coverage_pass": true,
+      "expected_escalation_match": true,
+      "actual_escalation": null,
+      "citations": 5,
+      "citation_id_integrity": true,
+      "sources": [
+        "retail-banking-escalation.md",
+        "retail-banking-policy.md",
+        "synthetic-retail-policy.docx"
+      ]
+    },
+    {
+      "id": "Q026",
+      "category": "own_permissions",
+      "top_k": 5,
+      "latency_ms": 564.7,
+      "keyword_proxy_pass": true,
+      "tool_coverage_pass": true,
+      "expected_escalation_match": true,
+      "actual_escalation": null,
+      "citations": 0,
+      "citation_id_integrity": true,
+      "sources": []
+    },
+    {
+      "id": "Q027",
+      "category": "own_permissions",
+      "top_k": 5,
+      "latency_ms": 570.58,
+      "keyword_proxy_pass": true,
+      "tool_coverage_pass": true,
+      "expected_escalation_match": true,
+      "actual_escalation": null,
+      "citations": 0,
+      "citation_id_integrity": true,
+      "sources": []
+    },
+    {
+      "id": "Q031",
+      "category": "access_request",
+      "top_k": 5,
+      "latency_ms": 566.18,
+      "keyword_proxy_pass": true,
+      "tool_coverage_pass": true,
+      "expected_escalation_match": true,
+      "actual_escalation": "pending_owner_review",
+      "citations": 0,
+      "citation_id_integrity": true,
+      "sources": []
+    },
+    {
+      "id": "Q036",
+      "category": "ambiguous",
+      "top_k": 5,
+      "latency_ms": 565.4,
+      "keyword_proxy_pass": null,
+      "tool_coverage_pass": true,
+      "expected_escalation_match": null,
+      "actual_escalation": "insufficient_evidence",
+      "citations": 0,
+      "citation_id_integrity": true,
+      "sources": []
+    },
+    {
+      "id": "Q040",
+      "category": "no_evidence",
+      "top_k": 5,
+      "latency_ms": 572.89,
+      "keyword_proxy_pass": null,
+      "tool_coverage_pass": true,
+      "expected_escalation_match": true,
+      "actual_escalation": "insufficient_evidence",
+      "citations": 0,
+      "citation_id_integrity": true,
+      "sources": []
+    },
+    {
+      "id": "Q041",
+      "category": "no_evidence",
+      "top_k": 5,
+      "latency_ms": 589.02,
+      "keyword_proxy_pass": null,
+      "tool_coverage_pass": true,
+      "expected_escalation_match": false,
+      "actual_escalation": null,
+      "citations": 3,
+      "citation_id_integrity": true,
+      "sources": [
+        "technology-policy.md"
+      ]
+    },
+    {
+      "id": "Q044",
+      "category": "injection",
+      "top_k": 5,
+      "latency_ms": 3.68,
+      "keyword_proxy_pass": true,
+      "tool_coverage_pass": true,
+      "expected_escalation_match": true,
+      "actual_escalation": "refused",
+      "citations": 0,
+      "citation_id_integrity": true,
+      "sources": []
+    },
+    {
+      "id": "Q048",
+      "category": "cross_folder_access",
+      "top_k": 5,
+      "latency_ms": 565.53,
+      "keyword_proxy_pass": null,
+      "tool_coverage_pass": true,
+      "expected_escalation_match": null,
+      "actual_escalation": "insufficient_evidence",
+      "citations": 0,
+      "citation_id_integrity": true,
+      "sources": []
+    },
+    {
+      "id": "Q050",
+      "category": "cross_folder_access",
+      "top_k": 5,
+      "latency_ms": 575.42,
+      "keyword_proxy_pass": null,
+      "tool_coverage_pass": true,
+      "expected_escalation_match": null,
+      "actual_escalation": "insufficient_evidence",
+      "citations": 0,
+      "citation_id_integrity": true,
+      "sources": []
+    }
+  ],
+  "retrieval_k_ablation": [
+    {
+      "id": "Q021",
+      "top_k": 3,
+      "latency_ms": 589.41,
+      "sources": [
+        "retail-banking-escalation.md",
+        "retail-banking-policy.md",
+        "synthetic-retail-policy.docx"
+      ],
+      "distinct_retail_sources": true,
+      "cross_format_sources": true
+    },
+    {
+      "id": "Q021",
+      "top_k": 8,
+      "latency_ms": 611.4,
+      "sources": [
+        "retail-banking-escalation.md",
+        "retail-banking-policy.md",
+        "synthetic-retail-policy.docx"
+      ],
+      "distinct_retail_sources": true,
+      "cross_format_sources": true
+    },
+    {
+      "id": "Q025",
+      "top_k": 3,
+      "latency_ms": 592.88,
+      "sources": [
+        "retail-banking-escalation.md",
+        "retail-banking-policy.md"
+      ],
+      "distinct_retail_sources": true,
+      "cross_format_sources": false
+    },
+    {
+      "id": "Q025",
+      "top_k": 8,
+      "latency_ms": 616.28,
+      "sources": [
+        "retail-banking-escalation.md",
+        "retail-banking-policy.md",
+        "synthetic-retail-policy.docx"
+      ],
+      "distinct_retail_sources": true,
+      "cross_format_sources": true
+    }
+  ]
+}

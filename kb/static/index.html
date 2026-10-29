@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#142333">
+  <meta name="description" content="A governed enterprise knowledge workspace. Ask questions, discover sources, and manage document approvals and access.">
+  <title>Knowledge | Enterprise workspace</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <svg class="icon-definitions" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z"/><path d="m20 2 .6 1.4L22 4l-1.4.6L20 6l-.6-1.4L18 4l1.4-.6L20 2Z"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M12 5v15M3 4c3-1 6-.5 9 1 3-1.5 6-2 9-1v15c-3-1-6-.5-9 1-3-1.5-6-2-9-1V4Z"/></symbol>
+    <symbol id="i-library" viewBox="0 0 24 24"><path d="M4 4h4v16H4zM11 4h4v16h-4zM17 5l3-1 4 15-3 1z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m7 12 3 3 7-7"/><path d="M20 11v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h10"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></symbol>
+    <symbol id="i-audit" viewBox="0 0 24 24"><path d="M9 3H5a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-4M9 2h5v4H9zM7 11h9M7 16h6"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m12 19 0-14M6 11l6-6 6 6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 3 9 4v5c0 5-9 9-9 9S3 17 3 12V7l9-4Z"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H5a1 1 0 0 0-1 1v18a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V8l-6-6Zm0 0v6h6M8 13h8M8 17h5"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-out" viewBox="0 0 24 24"><path d="M9 4H4v16h5m5-13 5 5-5 5M8 12h13"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 8a9 9 0 1 0 0 8M20 3v6h-6"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></symbol>
+  </svg>
+
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div id="boot-screen" class="boot-screen" role="status"><span class="brand-mark">k<span>.</span></span><p>Opening your knowledge workspace…</p></div>
+
+  <section id="login-view" class="login-layout" hidden aria-labelledby="login-title">
+    <div class="login-story">
+      <a class="brand login-brand" href="/" aria-label="Knowledge home"><span class="brand-mark">k<span>.</span></span><span>knowledge<span class="brand-sub">ENTERPRISE WORKSPACE</span></span></a>
+      <div class="login-story-copy"><span class="eyebrow light">KNOWLEDGE, WITH CONFIDENCE</span><h1>The right knowledge.<br>For the next decision.</h1><p>One trusted place for your organisation’s policies, expertise, and answers. Grounded in sources. Governed by design.</p><div class="login-pill"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg> Your access. Your authorised knowledge.</div></div>
+      <div class="login-story-foot"><span class="small-rule"></span>Built for clarity. Designed for trust.</div>
+    </div>
+    <div class="login-panel">
+      <div class="login-form-wrap">
+        <span class="eyebrow">YOUR ENTERPRISE KNOWLEDGE</span><h2 id="login-title">Welcome back.</h2><p class="muted login-intro">Sign in to your knowledge workspace.</p>
+        <form id="login-form">
+          <div class="field"><label for="demo-user">Sample employee <span class="optional">· demo accounts</span></label><select id="demo-user"><option value="">Choose a sample employee</option></select><p class="field-help">Select an account to fill its employee ID. A password is still required.</p></div>
+          <div class="field"><label for="employee-id">Employee ID</label><input id="employee-id" name="username" autocomplete="username" required placeholder="Enter your employee ID"></div>
+          <div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required placeholder="Enter your password"></div>
+          <p id="demo-password-hint" class="demo-hint" hidden></p>
+          <div id="login-error" class="inline-error" role="alert" hidden></div>
+          <button class="button primary login-submit" type="submit">Sign in securely <svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>
+        </form>
+        <div class="login-security"><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg><p>Access is scoped to your folder permissions. Sensitive information is protected according to your access policy.</p></div>
+        <p class="prototype-note">Independent prototype. Not affiliated with or endorsed by any bank. Sample accounts are for demonstration only.</p>
+      </div>
+    </div>
+  </section>
+
+  <div id="workspace" class="workspace" hidden>
+    <button id="sidebar-overlay" class="sidebar-overlay" aria-label="Close navigation" hidden></button>
+    <aside id="sidebar" class="sidebar" aria-label="Workspace navigation">
+      <a class="brand" href="#ask"><span class="brand-mark">k<span>.</span></span><span>knowledge<span class="brand-sub">ENTERPRISE WORKSPACE</span></span></a>
+      <div class="workspace-label"><span class="workspace-avatar">E</span><div>Enterprise knowledge<span>Staff workspace</span></div><span class="workspace-live" aria-label="Workspace"></span></div>
+      <div class="nav-label">WORKSPACE</div>
+      <nav id="primary-nav">
+        <a class="nav-item active" href="#ask" data-view="ask" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg>Ask knowledge</a>
+        <a class="nav-item" href="#library" data-view="library"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg>Document library</a>
+        <a class="nav-item" href="#approvals" data-view="approvals"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>Approvals<span id="approval-count" class="nav-count" hidden>0</span></a>
+        <a class="nav-item" href="#ingestion" data-view="ingestion"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg>Ingestion monitor</a>
+        <div class="nav-label nav-label-spaced">GOVERNANCE</div>
+        <a class="nav-item" href="#access" data-view="access"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>Folders & access</a>
+        <a class="nav-item" href="#audit" data-view="audit"><svg class="icon" aria-hidden="true"><use href="#i-audit"/></svg>Activity log</a>
+      </nav>
+      <div class="sidebar-bottom"><div class="sidebar-policy"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg><div>Knowledge you can trust<p>Source-grounded. Access-aware.</p></div></div><div class="sidebar-user"><span id="user-avatar" class="avatar">—</span><div class="user-copy"><strong id="user-name">Employee</strong><span id="user-unit">Enterprise workspace</span></div><button id="logout-button" class="icon-button" title="Sign out" aria-label="Sign out"><svg class="icon" aria-hidden="true"><use href="#i-out"/></svg></button></div></div>
+    </aside>
+    <div class="workspace-body">
+      <header class="topbar"><div class="topbar-left"><button id="menu-button" class="icon-button menu-button" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="#i-menu"/></svg></button><span class="breadcrumb">Workspace <svg class="icon" aria-hidden="true"><use href="#i-chevron"/></svg> <strong id="breadcrumb-current">Ask knowledge</strong></span></div><div class="topbar-right"><span id="mode-badge" class="mode-badge">Checking service mode</span><span class="topbar-divider"></span><span class="secure-label"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg>Governed workspace</span></div></header>
+      <main id="main-content" tabindex="-1">
+        <div id="global-alert" class="global-alert" role="alert" hidden><span id="global-alert-text"></span><button id="dismiss-alert" class="icon-button" aria-label="Dismiss notification"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></div>
+        <section id="view-ask" class="view ask-view" aria-labelledby="ask-title">
+          <div class="page-heading ask-heading"><div><span class="eyebrow">YOUR KNOWLEDGE PARTNER</span><h1 id="ask-title">Ask knowledge</h1><p>Trusted answers, connected to their sources.</p></div><button id="new-conversation" class="button secondary small"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>New conversation</button></div>
+          <div class="ask-layout"><div class="chat-main"><div id="chat-messages" class="chat-messages" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions">
+            <div id="chat-welcome" class="chat-welcome"><div class="welcome-symbol"><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg></div><span class="eyebrow">A LITTLE CLARITY GOES A LONG WAY</span><h2>What would you like to know?</h2><p>Explore policies, connect information across documents,<br class="desktop-break"> or check your access. Start with a question.</p><div class="suggestion-grid"><button class="suggestion" data-question="What documents can I access, and what knowledge is available to me?"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg><strong>Explore my knowledge</strong><span>Find information available to you</span><svg class="icon suggestion-arrow"><use href="#i-arrow"/></svg></button><button class="suggestion" data-question="What is the maker-checker process for onboarding a document? Cite the relevant policies."><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg><strong>Understand a process</strong><span>Get guidance grounded in policy</span><svg class="icon suggestion-arrow"><use href="#i-arrow"/></svg></button><button class="suggestion" data-question="Check my folder access and explain what actions I am permitted to perform."><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg><strong>Check my permissions</strong><span>Understand your folder access</span><svg class="icon suggestion-arrow"><use href="#i-arrow"/></svg></button><button class="suggestion" data-question="Summarise the key information from the documents I can access. Cite each source and identify any gaps."><svg class="icon" aria-hidden="true"><use href="#i-library"/></svg><strong>Connect the sources</strong><span>Bring authorised knowledge together</span><svg class="icon suggestion-arrow"><use href="#i-arrow"/></svg></button></div></div>
+          </div><div class="composer-area"><form id="chat-form" class="composer"><label class="sr-only" for="chat-input">Ask a question about your authorised knowledge</label><textarea id="chat-input" rows="2" maxlength="4000" placeholder="Ask a question about your knowledge…" required></textarea><div class="composer-bottom"><span><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg>Only your authorised sources</span><button id="send-button" class="send-button" type="submit" aria-label="Send question"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg></button></div></form><p class="composer-help"><span>Answers can be incomplete. Always review the cited sources.</span><span>Enter to send · Shift + Enter for a new line</span></p></div></div>
+            <aside class="knowledge-aside" aria-label="About this workspace"><div class="aside-title"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg>Built on your knowledge</div><p>Not the open web. Answers are grounded in the approved documents you’re allowed to access.</p><div class="trust-item"><span class="trust-index">01</span><div><h3>Evidence, not guesswork</h3><p>Review the supporting snippets and document citations.</p></div></div><div class="trust-item"><span class="trust-index">02</span><div><h3>Your permissions apply</h3><p>Folder access and sensitive-data policies follow every question.</p></div></div><div class="trust-item"><span class="trust-index">03</span><div><h3>Every step, accountable</h3><p>Expand the operational trace to see tools called and their results.</p></div></div><div class="mode-explainer"><span class="status-dot"></span><strong id="mode-title">Service mode</strong><p id="mode-description">Service status is being checked. No external inference is assumed.</p></div><a class="text-link" href="#library">Explore document library <svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a></aside>
+          </div>
+        </section>
+        <section id="view-library" class="view" hidden aria-labelledby="library-title"><div class="page-heading"><div><span class="eyebrow">GOVERNED KNOWLEDGE</span><h1 id="library-title">Document library</h1><p>The sources behind your answers. Managed from upload to approval.</p></div><button id="upload-button" class="button primary"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Upload document</button></div><div class="section-toolbar"><div class="search-field"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><label class="sr-only" for="document-search">Search documents</label><input id="document-search" type="search" placeholder="Search documents…"></div><div class="filter-group"><label class="sr-only" for="document-status">Document status</label><select id="document-status"><option value="">All statuses</option><option value="pending">Pending approval</option><option value="processing">Processing</option><option value="indexed">Indexed / approved</option><option value="rejected">Rejected</option><option value="failed">Failed</option></select><button class="button secondary" id="refresh-documents" aria-label="Refresh documents"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg><span>Refresh</span></button></div></div><div class="content-card"><div class="card-heading"><h2>All documents <span id="document-count" class="count-label"></span></h2><span class="muted small-text">Versions are preserved</span></div><div id="document-list"></div></div><p class="section-footnote"><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg>Only permitted documents are shown. Original source downloads are not exposed in this workspace.</p></section>
+        <section id="view-approvals" class="view" hidden aria-labelledby="approvals-title"><div class="page-heading"><div><span class="eyebrow">MAKER–CHECKER WORKFLOW</span><h1 id="approvals-title">Approvals</h1><p>A second pair of eyes. Review documents before they become knowledge.</p></div><button id="refresh-approvals" class="button secondary"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Refresh queue</button></div><div class="info-banner"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg><p>Separation of duties is enforced. A maker cannot approve their own upload. Only checkers with the required folder access can review.</p></div><div id="approval-list" class="approval-list"></div></section>
+        <section id="view-ingestion" class="view" hidden aria-labelledby="ingestion-title"><div class="page-heading"><div><span class="eyebrow">PIPELINE VISIBILITY</span><h1 id="ingestion-title">Ingestion monitor</h1><p>Follow each file from approval to index. Failures show the error and model response, and can be retried.</p></div><button id="refresh-ingestion" class="button secondary"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Refresh</button></div><div id="ingestion-summary"></div><div class="section-toolbar"><div class="search-field"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><label class="sr-only" for="ingestion-search">Search files</label><input id="ingestion-search" type="search" placeholder="Search files…"></div><div class="filter-group"><label class="sr-only" for="ingestion-filter">Stage</label><select id="ingestion-filter"><option value="">All stages</option><option value="awaiting_checker">Awaiting checker</option><option value="queued">Queued</option><option value="processing">Processing</option><option value="indexed">Indexed</option><option value="failed">Failed</option><option value="rejected">Rejected</option><option value="cancelled">Cancelled</option></select></div><span id="ingestion-updated" class="muted small-text"></span></div><div class="content-card"><div id="ingestion-list"></div></div></section>
+        <section id="view-access" class="view" hidden aria-labelledby="access-title"><div class="page-heading"><div><span class="eyebrow">ACCESS BY DESIGN</span><h1 id="access-title">Folders & access</h1><p>Give the right people the right knowledge. Manage folder-level permissions.</p></div><button id="create-folder-button" class="button primary"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Create folder</button></div><div class="access-layout"><div class="content-card folder-panel"><div class="card-heading"><h2>Business folders</h2><button id="refresh-access" class="icon-button" aria-label="Refresh folders"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg></button></div><div id="folder-list" class="folder-list" aria-label="Business folders"></div></div><div id="folder-detail" class="content-card folder-detail"><div class="empty-state"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg><h3>A place for every permission</h3><p>Select a folder to view its business context and access grants.</p></div></div></div></section>
+        <section id="view-audit" class="view" hidden aria-labelledby="audit-title"><div class="page-heading"><div><span class="eyebrow">ACCOUNTABILITY, BUILT IN</span><h1 id="audit-title">Activity log</h1><p>A traceable record of actions across your knowledge workspace.</p></div><button id="refresh-audit" class="button secondary"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Refresh activity</button></div><div class="section-toolbar"><div class="search-field"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><label class="sr-only" for="audit-search">Filter activity</label><input id="audit-search" type="search" placeholder="Search actions, people, or records…"></div><span class="muted small-text">Newest activity first</span></div><div class="content-card"><div class="card-heading"><h2>Workspace activity</h2><span class="small-text muted">Operational audit trail</span></div><div id="audit-list"></div></div></section>
+      </main>
+      <footer class="workspace-footer"><span>Knowledge, with confidence.</span><span>Independent prototype · Not affiliated with or endorsed by any bank.</span></footer>
+    </div>
+  </div>
+  <dialog id="form-dialog" aria-labelledby="dialog-title"><div class="dialog-heading"><div><span id="dialog-eyebrow" class="eyebrow">WORKSPACE</span><h2 id="dialog-title"></h2></div><button id="close-dialog" class="icon-button" aria-label="Close dialog"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></div><div id="dialog-body"></div></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

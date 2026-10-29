@@ -1,0 +1,252 @@
+[
+  {
+    "folder_id": "retail-banking",
+    "employee_id": "E001",
+    "role": "owner"
+  },
+  {
+    "folder_id": "retail-banking",
+    "employee_id": "E002",
+    "role": "checker"
+  },
+  {
+    "folder_id": "retail-banking",
+    "employee_id": "E003",
+    "role": "maker"
+  },
+  {
+    "folder_id": "retail-banking",
+    "employee_id": "E004",
+    "role": "delegate"
+  },
+  {
+    "folder_id": "retail-banking",
+    "employee_id": "E005",
+    "role": "reader"
+  },
+  {
+    "folder_id": "retail-banking",
+    "employee_id": "E006",
+    "role": "reader"
+  },
+  {
+    "folder_id": "retail-banking",
+    "employee_id": "E007",
+    "role": "reader"
+  },
+  {
+    "folder_id": "retail-banking",
+    "employee_id": "E008",
+    "role": "reader"
+  },
+  {
+    "folder_id": "retail-banking",
+    "employee_id": "E009",
+    "role": "reader"
+  },
+  {
+    "folder_id": "retail-banking",
+    "employee_id": "E010",
+    "role": "reader"
+  },
+  {
+    "folder_id": "technology",
+    "employee_id": "E011",
+    "role": "owner"
+  },
+  {
+    "folder_id": "technology",
+    "employee_id": "E012",
+    "role": "checker"
+  },
+  {
+    "folder_id": "technology",
+    "employee_id": "E013",
+    "role": "maker"
+  },
+  {
+    "folder_id": "technology",
+    "employee_id": "E014",
+    "role": "delegate"
+  },
+  {
+    "folder_id": "technology",
+    "employee_id": "E015",
+    "role": "reader"
+  },
+  {
+    "folder_id": "technology",
+    "employee_id": "E016",
+    "role": "reader"
+  },
+  {
+    "folder_id": "technology",
+    "employee_id": "E017",
+    "role": "reader"
+  },
+  {
+    "folder_id": "technology",
+    "employee_id": "E018",
+    "role": "reader"
+  },
+  {
+    "folder_id": "technology",
+    "employee_id": "E019",
+    "role": "reader"
+  },
+  {
+    "folder_id": "technology",
+    "employee_id": "E020",
+    "role": "reader"
+  },
+  {
+    "folder_id": "risk-compliance",
+    "employee_id": "E021",
+    "role": "owner"
+  },
+  {
+    "folder_id": "risk-compliance",
+    "employee_id": "E022",
+    "role": "checker"
+  },
+  {
+    "folder_id": "risk-compliance",
+    "employee_id": "E023",
+    "role": "maker"
+  },
+  {
+    "folder_id": "risk-compliance",
+    "employee_id": "E024",
+    "role": "delegate"
+  },
+  {
+    "folder_id": "risk-compliance",
+    "employee_id": "E025",
+    "role": "reader"
+  },
+  {
+    "folder_id": "risk-compliance",
+    "employee_id": "E026",
+    "role": "reader"
+  },
+  {
+    "folder_id": "risk-compliance",
+    "employee_id": "E027",
+    "role": "reader"
+  },
+  {
+    "folder_id": "risk-compliance",
+    "employee_id": "E028",
+    "role": "reader"
+  },
+  {
+    "folder_id": "risk-compliance",
+    "employee_id": "E029",
+    "role": "reader"
+  },
+  {
+    "folder_id": "risk-compliance",
+    "employee_id": "E030",
+    "role": "reader"
+  },
+  {
+    "folder_id": "finance",
+    "employee_id": "E031",
+    "role": "owner"
+  },
+  {
+    "folder_id": "finance",
+    "employee_id": "E032",
+    "role": "checker"
+  },
+  {
+    "folder_id": "finance",
+    "employee_id": "E033",
+    "role": "maker"
+  },
+  {
+    "folder_id": "finance",
+    "employee_id": "E034",
+    "role": "delegate"
+  },
+  {
+    "folder_id": "finance",
+    "employee_id": "E035",
+    "role": "reader"
+  },
+  {
+    "folder_id": "finance",
+    "employee_id": "E036",
+    "role": "reader"
+  },
+  {
+    "folder_id": "finance",
+    "employee_id": "E037",
+    "role": "reader"
+  },
+  {
+    "folder_id": "finance",
+    "employee_id": "E038",
+    "role": "reader"
+  },
+  {
+    "folder_id": "finance",
+    "employee_id": "E039",
+    "role": "reader"
+  },
+  {
+    "folder_id": "finance",
+    "employee_id": "E040",
+    "role": "reader"
+  },
+  {
+    "folder_id": "people",
+    "employee_id": "E041",
+    "role": "owner"
+  },
+  {
+    "folder_id": "people",
+    "employee_id": "E042",
+    "role": "checker"
+  },
+  {
+    "folder_id": "people",
+    "employee_id": "E043",
+    "role": "maker"
+  },
+  {
+    "folder_id": "people",
+    "employee_id": "E044",
+    "role": "delegate"
+  },
+  {
+    "folder_id": "people",
+    "employee_id": "E045",
+    "role": "reader"
+  },
+  {
+    "folder_id": "people",
+    "employee_id": "E046",
+    "role": "reader"
+  },
+  {
+    "folder_id": "people",
+    "employee_id": "E047",
+    "role": "reader"
+  },
+  {
+    "folder_id": "people",
+    "employee_id": "E048",
+    "role": "reader"
+  },
+  {
+    "folder_id": "people",
+    "employee_id": "E049",
+    "role": "reader"
+  },
+  {
+    "folder_id": "people",
+    "employee_id": "E050",
+    "role": "reader"
+  }
+]
