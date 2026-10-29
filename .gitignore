@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+var/
+KM_Data/
+*.skill
+Initial_Project_Requirements.md
+evaluation/results*.json
+# The original requirements contain a disclosed credential. Never commit them.
