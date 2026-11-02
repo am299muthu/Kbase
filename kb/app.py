@@ -392,6 +392,71 @@ def _failure_audit(db, request_ids):
     return found
 
 
+def _checker_pdf_request(db, user, request_id):
+    from kb.governance import CHECKER_ROLES, assert_binding
+    request = db.get(ProcessingRequest, request_id)
+    if not request:
+        raise HTTPException(404, 'Processing request not found.')
+    document = db.get(Document, request.document_id)
+    entitled(db, user.id, document.folder_id, CHECKER_ROLES)
+    if user.id in {request.maker_id, document.maker_id}:
+        raise HTTPException(403, 'A different checker must review the source.')
+    if request.status != 'pending':
+        raise HTTPException(409, 'Source review is available only while awaiting checker approval.')
+    assert_binding(request, document, check_runtime=False)
+    if not document.title.lower().endswith('.pdf'):
+        raise HTTPException(400, 'This source is not a PDF.')
+    return request, document
+
+
+def _checker_pdf_preview(request_id, user, db, page_number=None):
+    # Checker source review is a narrow permission for a pending approval, not
+    # a general entitlement to view unmasked indexed documents.
+    request, document = _checker_pdf_request(db, user, request_id)
+    import io
+    import pypdfium2 as pdfium
+    with tempfile.TemporaryDirectory() as temp:
+        source = Path(temp) / 'source.pdf'
+        ObjectStore().fetch(document.staging_key, source, expected_sha256=request.source_sha256)
+        with pdfium.PdfDocument(str(source)) as pdf:
+            page_count = len(pdf)
+            if page_number is None:
+                result = {'request_id': request.id, 'page_count': page_count,
+                          'source_sha256': request.source_sha256, 'version': request.source_version}
+            else:
+                if not 1 <= page_number <= page_count:
+                    raise HTTPException(404, 'Page not found.')
+                page = pdf[page_number-1]
+                try:
+                    width, height = page.get_size()
+                    bitmap = page.render(scale=min(1.5, 1800 / max(width, height)))
+                    try:
+                        output = io.BytesIO()
+                        bitmap.to_pil().save(output, format='PNG')
+                        result = output.getvalue()
+                    finally:
+                        bitmap.close()
+                finally:
+                    page.close()
+    db.refresh(request)
+    db.refresh(document)
+    _checker_pdf_request(db, user, request_id)
+    audit(db, user.id, 'processing.checker_source_viewed', document.id,
+          {'request_id': request.id, 'page': page_number, 'source_sha256': request.source_sha256})
+    return result
+
+
+@app.get('/api/processing-requests/{request_id}/review-pdf')
+def checker_pdf_info(request_id: str, user=Depends(user_context), db=Depends(connection)):
+    return _checker_pdf_preview(request_id, user, db)
+
+
+@app.get('/api/processing-requests/{request_id}/review-pdf/pages/{page_number}')
+def checker_pdf_page(request_id: str, page_number: int, user=Depends(user_context), db=Depends(connection)):
+    content = _checker_pdf_preview(request_id, user, db, page_number)
+    return Response(content, media_type='image/png', headers={'Cache-Control': 'no-store'})
+
+
 @app.get('/api/processing-requests/{request_id}/pdf-layout')
 def pdf_layout(request_id: str, user=Depends(user_context), db=Depends(connection)):
     request = db.get(ProcessingRequest, request_id)

@@ -1,0 +1,77 @@
+[
+  [
+    "01  INGESTION  |  file to searchable evidence",
+    [
+      [
+        "Upload + approval",
+        "Maker uploads file + metadata\nGarage: staged original\nSQLite: document + request\nIndependent checker approves"
+      ],
+      [
+        "Local PDF extraction",
+        "pypdf: electronic text\npdfplumber: ruled tables\nDocling: layout + object crops\nScan regions: overlapping tiles"
+      ],
+      [
+        "Visual interpretation",
+        "Approved crops \u2192 OpenRouter\nVision primary \u2192 fallback*\nValidate structured response\nKeep source IDs + bounding boxes"
+      ],
+      [
+        "Chunks + embeddings",
+        "Store parsed content + chunks\nLocal PII masking \u2192 model check\nValidated text \u2192 embedding model\nGuardrail failure stops this run"
+      ],
+      [
+        "Index + publish",
+        "OpenSearch: text + vectors\nSQLite publishes generation\nOnly published chunks retrieved\nOld generation survives failure"
+      ]
+    ]
+  ],
+  [
+    "02  QUESTION ANSWERING  |  question to cited answer",
+    [
+      [
+        "Question + identity",
+        "Employee signs in\nFastAPI receives question\nMCP tools resolve folder grants\nSQLite is access authority"
+      ],
+      [
+        "Retrieve evidence",
+        "Question \u2192 text embedding\nOpenSearch BM25 + text k-NN\nRank fusion combines results\nFilter folders + live generations"
+      ],
+      [
+        "Validate source",
+        "SQL checks chunk manifests\nCheck retention + source lineage\nResolve cited evidence sections\nReject stale / unauthorized hits"
+      ],
+      [
+        "Generate + verify",
+        "Evidence \u2192 OpenRouter answer\nValidate citation IDs\nModel checks claim grounding\nApply output PII rules by access"
+      ],
+      [
+        "Release answer",
+        "Recheck session + permissions\nShow answer + source citations\nExpose permitted tool trace\nWithhold if required checks fail"
+      ]
+    ]
+  ],
+  [
+    "03  DEBUGGING  |  parallel views of pipeline and search data",
+    [
+      [
+        "Capture geometry",
+        "After parsing, before model calls\nSQLite audit: PDF layout snapshot\nObject ID + type + page + bbox\nNo PDF text in geometry snapshot"
+      ],
+      [
+        "Retain artifacts",
+        "Garage: original per request\nParsed JSON + visual crops\nCurated chunk JSON\nLegacy runs: crop geometry only"
+      ],
+      [
+        "PDF object inspector",
+        "Select PDF run + page\nLocal PDFium renders source\nSVG boxes overlay the page\nSelect box, layer, zoom; export"
+      ],
+      [
+        "Ingestion monitor",
+        "SQLite: request + live progress\nAudit: error + model excerpts\nMaker/checker retries unchanged\napproval without new review"
+      ],
+      [
+        "Search diagnostics",
+        "OpenSearch \u2192 Query Insights\nTop-query latency \u2192 Dashboards\nSlowlog \u2192 local query viewer\nSearch latency \u2260 total chat time"
+      ]
+    ]
+  ]
+]

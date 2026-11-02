@@ -36,3 +36,22 @@ only contain their previously persisted crop geometry; full text-region layout
 requires a new parse. The source PDF is rendered locally with PDFium, with no
 model call. The original stays unchanged. Annotated PDF downloads are also
 available from the geometry panel.
+
+## Checker PDF review before approval
+
+Pending PDF approval cards now include **Open PDF for review**. It displays the
+exact staged PDF (verified against the request SHA-256) locally, with a page
+selector, previous/next controls, zoom, version and hash. Close it with **Return
+to approval**, then confirm scope and approve/reject using the existing form.
+Viewing does not approve or queue ingestion, and does not require parsing or
+external model calls.
+
+This is a request-specific source-review permission: active folder checkers,
+owners and delegates may view a pending request if they are neither its maker
+nor the source maker. They do not need the global `pii_unmasked` entitlement.
+This exception does not grant general original-document access to the PDF object
+inspector. Each request checks current folder permission, pending status and
+source/metadata/scope binding before and after rendering; views are audited.
+Endpoints: `/api/processing-requests/{id}/review-pdf` and
+`/api/processing-requests/{id}/review-pdf/pages/{page}`. No arbitrary storage key
+is accepted, and responses are not cached.

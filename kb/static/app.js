@@ -691,6 +691,39 @@
     });
     body.append(form);
   }
+  async function openCheckerPdf(doc, request) {
+    const body = openDialog('Review PDF before approval', 'CHECKER SOURCE REVIEW');
+    const epoch = state.epoch;
+    body.append(el('h3', '', doc.title), el('p', 'dialog-notice', 'Original submitted content for this pending approval. Viewing does not approve the request. Close the viewer to confirm scope and approve or reject.'));
+    const message=el('p','','Loading source…');body.append(message);
+    let data;
+    try { data=await api(`/api/processing-requests/${encodeURIComponent(request.id)}/review-pdf`); }
+    catch(error) { message.className='inline-error';message.textContent=error.message;return; }
+    if(epoch!==state.epoch || !body.isConnected) return;
+    message.textContent=`Version ${data.version} · ${data.page_count} pages`;
+    body.append(el('pre','audit-detail',`SHA-256: ${data.source_sha256}`));
+    const toolbar=el('div','pdf-debug-toolbar');
+    const page=el('select');page.setAttribute('aria-label','Review PDF page');
+    for(let n=1;n<=data.page_count;n++){const option=el('option','',`Page ${n}`);option.value=n;page.append(option);}
+    const zoom=el('select');zoom.setAttribute('aria-label','Review PDF zoom');
+    [100,150,200].forEach(n=>{const option=el('option','',`${n}%`);option.value=n;zoom.append(option);});
+    const previous=button('Previous','mini-button'),next=button('Next','mini-button');
+    toolbar.append(previous,page,next,zoom);body.append(toolbar);
+    const viewport=el('div','checker-pdf-viewport');const img=el('img');viewport.append(img);body.append(viewport);
+    const error=el('p','inline-error');body.append(error);
+    const draw=()=>{
+      error.textContent='';img.alt=`Submitted PDF page ${page.value}`;
+      img.src=`/api/processing-requests/${encodeURIComponent(request.id)}/review-pdf/pages/${page.value}`;
+      previous.disabled=Number(page.value)<=1;next.disabled=Number(page.value)>=data.page_count;
+    };
+    img.addEventListener('error',()=>{error.textContent='Page unavailable. The request may no longer be pending, access may have changed, or storage may be unavailable.';});
+    previous.addEventListener('click',()=>{page.value=String(Number(page.value)-1);draw();});
+    next.addEventListener('click',()=>{page.value=String(Number(page.value)+1);draw();});
+    page.addEventListener('change',draw);
+    zoom.addEventListener('change',()=>{img.style.width=`${zoom.value}%`;});
+    const done=button('Return to approval','button primary');done.addEventListener('click',()=>$('form-dialog').close());body.append(done);draw();
+  }
+
   function renderApprovals() {
     const docs = state.documents.filter(isPending).sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
     const list = $('approval-list');
@@ -713,6 +746,11 @@
       } else if (own || !canCheck(folderById(doc.folder_id))) {
         card.append(el('p', 'approval-lock-note', own ? 'This is your upload. A different authorised checker must review it.' : 'Checker or folder-owner access is required to review this document.'));
       } else {
+        if (/\.pdf$/i.test(doc.title)) {
+          const preview = button('Open PDF for review', 'button secondary');
+          preview.addEventListener('click', () => openCheckerPdf(doc, request).catch(alertError));
+          card.append(preview);
+        }
         const form = el('form', 'review-form');
         const scope = el('details');
         scope.append(el('summary', '', 'Review source hash and exact processing/transfer scope'),
@@ -846,8 +884,9 @@
   }
   async function loadPdfChoices() {
     const host=$('pdfdebug-content');
+    const epoch=state.epoch;
     const data=await api('/api/ingestion');
-    if (host.dataset.loaded) return;
+    if (epoch !== state.epoch || host.dataset.loaded) return;
     host.replaceChildren(el('p','','Choose an ingestion run to inspect its PDF:'));
     for(const item of data.items.filter(i=>i.request_id && /\.pdf$/i.test(i.title))) {
       const choose=button(`${item.title} · ${item.stage}`, 'button secondary');
@@ -857,9 +896,15 @@
   async function openPdfInspector(item) {
     const host = $('pdfdebug-content');
     host.dataset.loaded='1';
-    host.replaceChildren(el('p', '', 'Loading PDF geometry…'));
-    const data = await api(`/api/processing-requests/${encodeURIComponent(item.request_id)}/pdf-layout`);
-    host.replaceChildren(el('h2', '', item.title));
+    const epoch=state.epoch;
+    const back=button('Choose another PDF', 'button secondary');
+    back.addEventListener('click',()=>{delete host.dataset.loaded;loadPdfChoices().catch(alertError);});
+    host.replaceChildren(back,el('p', '', 'Loading PDF geometry…'));
+    let data;
+    try { data = await api(`/api/processing-requests/${encodeURIComponent(item.request_id)}/pdf-layout`); }
+    catch(error) { if(epoch===state.epoch) host.replaceChildren(back,el('p','inline-error',error.message)); return; }
+    if(epoch!==state.epoch) return;
+    host.replaceChildren(back,el('h2', '', item.title));
     if (!state.user?.pii_unmasked) {
       host.append(el('p', 'inline-error', 'Viewing original PDF content requires unmasked-content permission. Use an authorized account such as Alex Demo1 (E001). Geometry remains available in ingestion Details.'));
       return;
@@ -878,14 +923,18 @@
     const split=el('div','pdf-debug-split'), scroll=el('div','pdf-debug-scroll'), stage=el('div','pdf-debug-stage'), side=el('div','pdf-debug-objects');
     scroll.append(stage);split.append(scroll,side);host.append(split);
     let selected=null;
+    let renderedPage=null;
     const draw = () => {
-      stage.replaceChildren();side.replaceChildren();stage.style.width=`${zoom.value}%`;
+      stage.querySelector('svg')?.remove();side.replaceChildren();stage.style.width=`${zoom.value}%`;
       const objects=data.objects.filter(o=>String(o.page)===pageSelect.value);
       const b=objects[0].bbox;
+      if(renderedPage!==pageSelect.value) {
+      stage.replaceChildren();renderedPage=pageSelect.value;
       const img=el('img');img.alt=`Original PDF page ${pageSelect.value}`;
       img.src=`/api/processing-requests/${encodeURIComponent(item.request_id)}/pdf-layout/page/${pageSelect.value}`;
       img.addEventListener('error',()=>{side.prepend(el('p','inline-error','Could not load the original PDF page. Check access and storage availability.'));});
       stage.append(img);
+      }
       const ns='http://www.w3.org/2000/svg'; const svg=document.createElementNS(ns,'svg');
       svg.setAttribute('viewBox',`0 0 ${b.page_width} ${b.page_height}`);svg.setAttribute('preserveAspectRatio','none');svg.classList.add('pdf-debug-overlay');stage.append(svg);
       objects.forEach((obj,i)=>{
@@ -900,6 +949,7 @@
         const card=el('div','pdf-debug-object');if(selected===obj.object_id)card.classList.add('selected');
         card.append(entry,el('p','muted',obj.extractor),el('code','',obj.object_id),el('pre','',JSON.stringify(box,null,2)));side.append(card);
       });
+      if(!side.childElementCount) side.append(el('p','muted',layer.value==='none'?'Boxes hidden.':'No objects recorded for this layer on this page.'));
     };
     [pageSelect,layer,zoom].forEach(control=>control.addEventListener('change',draw));draw();
   }
