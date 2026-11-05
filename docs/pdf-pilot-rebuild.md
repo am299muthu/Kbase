@@ -135,3 +135,23 @@ and community [Unstructured PDF Parser skill](https://github.com/memtomem/agent-
 are installed in the user's Codex skills directory. These are agent guidance;
 the second skill is not the Unstructured.io cloud service or a new runtime
 dependency. No corpus was sent to an Unstructured service.
+
+## Model fallback chains and 4096-dimension embeddings (2026-11-04)
+
+Model settings now accept ordered, comma-separated chains (`kb/config.py: model_chain`, `kb/providers.py: run_model_chain`):
+
+| Task | Setting | Order tried |
+|---|---|---|
+| Answers | `OPENROUTER_MODEL` | free models in listed order, then paid |
+| Guardrails | `OPENROUTER_GUARDRAIL_MODEL` (else `OPENROUTER_MODEL`) | same |
+| VL interpretation | `OPENROUTER_VISION_MODEL` + `OPENROUTER_VISION_FALLBACK_MODEL` | free primary, free fallback, then paid |
+| Text embeddings | `OPENROUTER_EMBEDDING_MODEL` (single model) | `qwen/qwen3-embedding-8b`, 4096 dimensions (paid; requested with `dimensions=4096`) |
+| Image embeddings | `OPENROUTER_IMAGE_EMBEDDING_MODEL` | chain; disabled in `pdf-hybrid`. Qwen text embeddings cannot embed pixels. |
+
+- The next model is tried after an availability, quota, credit, missing-endpoint or invalid-output failure. HTTP 401/403 and approval errors stop immediately. Each attempt is recorded in the failure diagnostics (`trying_next_model`, `paid_model_used`).
+- A non-`:free` model is reachable only when `OPENROUTER_PAID_MAX_PRICE_PROMPT` and `_COMPLETION` (USD per million tokens) are above zero; they are sent as the provider `max_price`, and free models keep the zero ceiling. They are part of the approval scope, so changing them needs fresh checker approval.
+- The `OPENROUTER_For_VL_MODELS` / `OPENROUTER_EMBEDDING_For_VL_MODELS` names in `.env` are not read by the code; the settings above are authoritative.
+- Mixing embedding models in one field would make query and document vectors incomparable, so the embedding setting must be a single model. A 4096-dimension model needs a new index: `abc-kb-curated-multimodal-v3` (created from `index_definition()`; the service role gained that exact index). `profiles/pdf-hybrid.env` now selects v3. The v2 index and all objects are untouched for rollback.
+
+Cutover state: v3 is empty, so `profile-check` fails and the app must not be restarted on `pdf-hybrid` yet. 18 reprocess requests (new scope) are pending E002 review; after approval run `KB_RUNTIME_PROFILE=pdf-hybrid .venv/bin/python -m kb.cli worker`, then `profile-check`. Rollback: restore `profiles/pdf-hybrid.env` (v2) and `.env` from `var/`.
+

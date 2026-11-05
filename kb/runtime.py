@@ -4,8 +4,8 @@ import math
 from sqlalchemy import select
 
 from kb.config import settings
-from kb.db import Chunk, Document, db_session
-from kb.governance import require_current_approval
+from kb.db import Chunk, Document, IndexedGeneration, ProcessingRequest, db_session
+from kb.governance import GovernanceError, processing_scope, validate_approval
 from kb.search import _validate_vectors, client, index_for_document, retention_cutoff, verified_payload
 from kb.storage import ObjectStore
 
@@ -42,7 +42,18 @@ def check_hybrid_readiness() -> dict:
                 document_index = index_for_document(db, document)
                 needs_vectors = document_index == cfg.opensearch_index
                 if needs_vectors:
-                    require_current_approval(db, document)
+                    generation = db.get(IndexedGeneration, document.id)
+                    approval = db.get(ProcessingRequest, generation.request_id) if generation else None
+                    if approval is None or approval.status != 'completed':
+                        raise GovernanceError('Published generation has no completed approval')
+                    validate_approval(db, approval, document, check_runtime=False)
+                    # Object-count budgets govern future parsing, not already published chunks.
+                    # New processing and model transfers still require an exact scope match.
+                    current_scope = processing_scope()
+                    approved_scope = {**approval.scope_json, 'parser': dict(approval.scope_json['parser'])}
+                    approved_scope['parser']['PARSER_MAX_PDF_OBJECTS'] = current_scope['parser']['PARSER_MAX_PDF_OBJECTS']
+                    if approved_scope != current_scope:
+                        raise GovernanceError('Published generation processing scope changed')
                 records = list(db.scalars(select(Chunk).where(Chunk.document_id == document.id)))
                 if not records:
                     raise ValueError('An indexed document has no current chunks')

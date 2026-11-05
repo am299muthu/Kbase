@@ -100,6 +100,15 @@ class ProcessingProgress(Base):
     updated_at: Mapped[str] = mapped_column(String(40), default=now)
 
 
+class ReplacementCleanup(Base):
+    """Durable deletion work, committed before any external object is removed."""
+    __tablename__ = 'replacement_cleanups'
+    document_id: Mapped[str] = mapped_column(ForeignKey('documents.id'), primary_key=True)
+    replacement_id: Mapped[str] = mapped_column(ForeignKey('documents.id'), index=True)
+    status: Mapped[str] = mapped_column(String(20), default='pending')
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class ControlAttestation(Base):
     """Explicit checker evidence; maker-supplied approval booleans have no authority."""
     __tablename__ = 'control_attestations'

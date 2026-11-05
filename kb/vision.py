@@ -1,5 +1,6 @@
 """Opt-in visual enrichment; never upload whole PDFs or whole-page renders."""
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 
 from kb.config import settings
@@ -25,6 +26,7 @@ def enrich_pdf_visuals(parsed: ParsedDocument, asset_dir: Path) -> ParsedDocumen
     blocks = []
     cache = {}
     count = 0
+    maximum = _limit('PARSER_MAX_PDF_OBJECTS', 0, allow_zero=True)
     total = sum(bool(block.asset_path and block.metadata.get('object_id') and not block.metadata.get('generated')) for block in parsed.blocks)
     total_chars = sum(len(block.text) for block in parsed.blocks)
     for block in parsed.blocks:
@@ -42,7 +44,7 @@ def enrich_pdf_visuals(parsed: ParsedDocument, asset_dir: Path) -> ParsedDocumen
         if hashlib.sha256(data).hexdigest() != asset['sha256']:
             raise ValueError('Visual source asset failed integrity validation')
         count += 1
-        if count > _limit('PARSER_MAX_PDF_OBJECTS', 100):
+        if maximum and count > maximum:
             raise ParserLimitError('Visual enrichment exceeds the object limit')
         key = (asset['sha256'], asset['object_kind'])
         report_progress('visual_enrichment', completed=count - 1, total=total)
@@ -63,4 +65,4 @@ def enrich_pdf_visuals(parsed: ParsedDocument, asset_dir: Path) -> ParsedDocumen
         blocks.append(ParsedBlock(text, block.section, block.page, 'vision_description', block.asset_path, metadata))
     if len(blocks) > _limit('PARSER_MAX_BLOCKS', 200000):
         raise ParserLimitError('Visual enrichment exceeds block limits')
-    return ParsedDocument(blocks, parsed.assets, parsed.parser)
+    return replace(parsed, blocks=blocks)

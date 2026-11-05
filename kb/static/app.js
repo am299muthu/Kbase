@@ -53,12 +53,23 @@
   function canManage(folder) { return sameId(folder?.owner_id, state.user?.id) || roles(folder).some((role) => ['owner', 'delegate'].includes(role)); }
   function canMake(folder) { return canManage(folder) || roles(folder).includes('maker'); }
   function canCheck(folder) { return canManage(folder) || roles(folder).includes('checker'); }
-  function statusKey(doc) { return String(doc.status || 'unknown').toLowerCase().replace(/[\s-]+/g, '_'); }
-  function isPending(doc) { return doc.processing_request?.status === 'pending' || ['pending', 'pending_approval', 'staged', 'awaiting_approval'].includes(statusKey(doc)); }
+  function statusKey(doc) { if (doc.processing_request?.kind === 'initial' && doc.processing_request.status === 'cancelled' && doc.status !== 'superseded') return 'cancelled'; return String(doc.status || 'unknown').toLowerCase().replace(/[\s-]+/g, '_'); }
+  function isPending(doc) { return doc.processing_request ? doc.processing_request.status === 'pending' : ['pending', 'pending_approval', 'staged', 'awaiting_approval'].includes(statusKey(doc)); }
+  function canCancelRequest(doc) { const request = doc.processing_request; return request && ['pending', 'approved'].includes(request.status) && sameId(request.maker_id, state.user?.id) && canMake(folderById(doc.folder_id)); }
+  function cancelRequestButton(requestId) {
+    const control = button('Cancel request', 'mini-button');
+    control.addEventListener('click', () => busy(control, async () => {
+      await api(`/api/processing-requests/${encodeURIComponent(requestId)}/cancel`, { method: 'POST', body: {} });
+      notify('Request cancelled. It is no longer awaiting approval or queued for processing.');
+      await refreshDocuments();
+      if (state.view === 'ingestion') await refreshIngestion();
+    }).catch(alertError));
+    return control;
+  }
   function isFailed(doc) { return ['failed', 'error', 'processing_failed'].includes(statusKey(doc)); }
   function statusBadge(doc) {
     const key = statusKey(doc);
-    const labels = { pending: 'Pending approval', pending_approval: 'Pending approval', staged: 'Pending approval', awaiting_approval: 'Pending approval', indexed: 'Indexed', approved: 'Approved', ready: 'Ready', processing: 'Processing', ingesting: 'Processing', rejected: 'Rejected', failed: 'Failed', error: 'Failed', archived: 'Archived' };
+    const labels = { pending: 'Pending approval', pending_approval: 'Pending approval', staged: 'Pending approval', awaiting_approval: 'Pending approval', indexed: 'Indexed', approved: 'Approved', ready: 'Ready', processing: 'Processing', ingesting: 'Processing', rejected: 'Rejected', failed: 'Failed', error: 'Failed', archived: 'Archived', cancelled: 'Cancelled' };
     const badge = el('span', 'status', labels[key] || key.replaceAll('_', ' '));
     if (/^[a-z_]+$/.test(key)) badge.classList.add(key);
     return badge;
@@ -76,7 +87,7 @@
   }
   async function api(path, options = {}) {
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), path === '/chat' ? 180000 : 60000);
+    const timer = window.setTimeout(() => controller.abort(), path === '/chat' ? 1080000 : 60000);
     const headers = new Headers(options.headers || {});
     let body = options.body;
     if (body !== undefined && !(body instanceof FormData)) {
@@ -90,6 +101,7 @@
       if (!response.ok) {
         const error = new Error(errorMessage(data?.detail || data?.error || (response.status === 401 ? 'Your session has ended. Please sign in again.' : `Request failed (${response.status}).`)));
         error.status = response.status;
+        error.detail = data?.detail;
         if (response.status === 401 && state.user && path !== '/api/login') showLogin(error.message);
         throw error;
       }
@@ -226,6 +238,7 @@
     delete $('pdfdebug-content').dataset.loaded;
     state.folders = [];
     state.documents = [];
+    $('review-scope').value = '';
     state.employees = [];
     state.events = [];
     state.folderId = null;
@@ -428,7 +441,9 @@
     const section = el('section', 'citations');
     section.setAttribute('aria-label', 'Supporting sources');
     const heading = el('h3', 'citations-heading');
-    heading.append(icon('book'), document.createTextNode(`${citations.length} supporting source${citations.length === 1 ? '' : 's'}`));
+    const documents = new Set(citations.map(citation => citation.document_id).filter(Boolean));
+    const coverage = documents.size ? ` across ${documents.size} document${documents.size === 1 ? '' : 's'}` : '';
+    heading.append(icon('book'), document.createTextNode(`${citations.length} cited passage${citations.length === 1 ? '' : 's'}${coverage}`));
     section.append(heading);
     citations.forEach((citation, index) => {
       const card = el('article', 'citation-card');
@@ -447,7 +462,7 @@
   function appendTrace(node, trace) {
     if (!Array.isArray(trace) || !trace.length) return;
     const details = el('details', 'trace-details');
-    details.append(el('summary', '', `Operational trace · ${trace.length} tool call${trace.length === 1 ? '' : 's'}`));
+    details.append(el('summary', '', `Operational trace · ${trace.length} steps`));
     const list = el('div', 'trace-list');
     trace.forEach((step, index) => {
       const item = el('div', 'trace-step');
@@ -455,6 +470,15 @@
       heading.append(el('strong', '', `${String(index + 1).padStart(2, '0')}  ${text(step.tool, 'Tool call')}`));
       if (Number.isFinite(Number(step.duration_ms)) && step.duration_ms !== null) heading.append(el('span', '', `${Math.round(Number(step.duration_ms))} ms`));
       item.append(heading);
+      if (step.tool === 'plan_questions' && Array.isArray(step.result?.parts)) {
+        item.append(el('p', '', `${step.result.method} · ${step.result.parts.length} planned searches`));
+        const questions = el('ol');
+        for (const query of step.result.parts) questions.append(el('li', '', query));
+        item.append(questions);
+      } else if (step.tool === 'searchdocuments') {
+        item.append(el('p', '', step.arguments?.query),
+          el('small', 'muted', `Requested ${step.arguments?.top_k} passages · retrieved ${step.result?.evidence?.length || 0}`));
+      }
       const payload = el('details');
       payload.append(el('summary', '', 'View arguments & result'), el('pre', '', `Arguments\n${safeJSON(step.arguments || {})}\n\nResult\n${safeJSON(step.result)}`));
       item.append(payload);
@@ -520,8 +544,37 @@
     }
   }
 
+  function reviewable(doc) {
+    const request = doc.processing_request;
+    return request?.status === 'pending' && canCheck(folderById(doc.folder_id))
+      && !sameId(request.maker_id, state.user?.id) && !sameId(doc.maker_id, state.user?.id);
+  }
   function updateCounts() {
     const count = state.documents.filter(isPending).length;
+    const pending = state.documents.filter(isPending);
+    const reviewCount = pending.filter(reviewable).length;
+    $('review-scope').options[0].textContent = `All pending requests (${pending.length})`;
+    $('review-scope').options[1].textContent = `I can review (${reviewCount})`;
+    const links = $('workspace-links');
+    links.replaceChildren();
+    for (const [label, total, view, filter] of [
+      ['Documents in your library', state.documents.length, 'library', ''],
+      ['Requests you can review', reviewCount, 'approvals', 'mine'],
+      ['Failed documents', state.documents.filter(isFailed).length, 'library', 'failed'],
+      ['Folders you can access', state.folders.length, 'access', '']
+    ]) {
+      const link = el('a', 'workspace-stat');
+      link.href = `#${view}`;
+      link.append(el('span', '', label), el('strong', '', total), icon('chevron'));
+      link.addEventListener('click', () => {
+        if (view === 'library') {
+          $('document-search').value = '';
+          $('document-status').value = filter;
+        }
+        if (view === 'approvals') $('review-scope').value = filter;
+      });
+      links.append(link);
+    }
     $('approval-count').textContent = String(count);
     $('approval-count').hidden = count === 0;
     $('upload-button').disabled = !state.folders.some(canMake);
@@ -581,6 +634,7 @@
       detail.setAttribute('aria-label', `Details for ${doc.title || 'document'}`);
       detail.addEventListener('click', () => openDocumentDetails(doc));
       actions.append(detail);
+      if (canCancelRequest(doc)) actions.append(cancelRequestButton(doc.processing_request.id));
       if (canMake(folderById(doc.folder_id))) {
         const edit = button('Edit metadata', 'mini-button');
         edit.setAttribute('aria-label', `Edit metadata for ${doc.title || 'document'}`);
@@ -653,9 +707,36 @@
       payload.append('folder_id', folder.input.value);
       if (date.input.value) payload.append('latest_date', date.input.value);
       payload.append('metadata', JSON.stringify(metadataObject(metadata.input.value)));
-      await api('/api/documents', { method: 'POST', body: payload });
+      let result;
+      try {
+        result = await api('/api/documents', { method: 'POST', body: payload });
+      } catch (error) {
+        if (error.status !== 409 || error.detail?.code !== 'duplicate_filename') throw error;
+        const matches = error.detail.documents;
+        if (!matches.length) throw new Error('The existing files changed. Please submit again.');
+        const choice = await new Promise((resolve) => {
+          const panel = el('div', 'content-card');
+          panel.setAttribute('role', 'group');
+          panel.setAttribute('aria-label', 'Existing filename');
+          panel.append(el('h3', '', 'An indexed file with this name already exists'),
+            el('p', '', `“${file.files[0].name}” has ${matches.length} indexed version(s) in this folder.`),
+            el('p', '', 'Replace removes the matching indexed versions, their stored files and search entries, and cancels their queued requests. Keep as new version preserves them.'));
+          const actions = el('div', 'dialog-actions');
+          for (const [label, value] of [['Replace', 'replace'], ['Keep as new version', 'version'], ['Cancel upload', null]]) {
+            const control = button(label);
+            control.addEventListener('click', () => { panel.remove(); resolve(value); }, { once: true });
+            actions.append(control);
+          }
+          panel.append(actions); form.append(panel);
+          actions.firstElementChild.focus();
+        });
+        if (!choice) return;
+        payload.append('replace_ids', JSON.stringify(matches.map((doc) => doc.id)));
+        payload.append('duplicate_action', choice);
+        result = await api('/api/documents', { method: 'POST', body: payload });
+      }
       $('form-dialog').close();
-      notify('Document uploaded and submitted for checker approval.');
+      notify(result.cleanup_pending ? 'Replacement uploaded. Previous files and index entries are being cleaned up; checker approval is required.' : 'Document uploaded and submitted for checker approval.');
       await refreshDocuments().catch(alertError);
     });
     body.append(form);
@@ -699,7 +780,7 @@
     let data;
     try { data=await api(`/api/processing-requests/${encodeURIComponent(request.id)}/review-pdf`); }
     catch(error) { message.className='inline-error';message.textContent=error.message;return; }
-    if(epoch!==state.epoch || !body.isConnected) return;
+    if(epoch!==state.epoch || !message.isConnected || !$('form-dialog').open) return;
     message.textContent=`Version ${data.version} · ${data.page_count} pages`;
     body.append(el('pre','audit-detail',`SHA-256: ${data.source_sha256}`));
     const toolbar=el('div','pdf-debug-toolbar');
@@ -709,24 +790,74 @@
     [100,150,200].forEach(n=>{const option=el('option','',`${n}%`);option.value=n;zoom.append(option);});
     const previous=button('Previous','mini-button'),next=button('Next','mini-button');
     toolbar.append(previous,page,next,zoom);body.append(toolbar);
-    const viewport=el('div','checker-pdf-viewport');const img=el('img');viewport.append(img);body.append(viewport);
-    const error=el('p','inline-error');body.append(error);
-    const draw=()=>{
-      error.textContent='';img.alt=`Submitted PDF page ${page.value}`;
-      img.src=`/api/processing-requests/${encodeURIComponent(request.id)}/review-pdf/pages/${page.value}`;
+    const viewport=el('div','checker-pdf-viewport');
+    viewport.tabIndex=0;viewport.setAttribute('role','region');
+    viewport.setAttribute('aria-label','PDF pages. Scroll to read the document.');
+    const stack=el('div','checker-pdf-pages');viewport.append(stack);body.append(viewport);
+    const pages=[];
+    const observer=new IntersectionObserver((entries)=>{
+      for(const entry of entries){
+        if(!entry.isIntersecting) continue;
+        const img=entry.target.querySelector('img');
+        if(!img.src) img.src=img.dataset.src;
+        observer.unobserve(entry.target);
+      }
+    },{root:viewport,rootMargin:'600px 0px'});
+    for(let n=1;n<=data.page_count;n++){
+      const sheet=el('figure','checker-pdf-page');
+      const caption=el('figcaption','',`Page ${n} of ${data.page_count}`);
+      const frame=el('div','checker-pdf-frame');
+      const size=data.page_sizes?.[n-1];
+      frame.style.aspectRatio=size ? `${size[0]} / ${size[1]}` : '3 / 4';
+      const img=el('img');img.alt=`Submitted PDF page ${n}`;img.decoding='async';
+      img.dataset.src=`/api/processing-requests/${encodeURIComponent(request.id)}/review-pdf/pages/${n}`;
+      const status=el('p','checker-pdf-page-status','Loading page…');
+      img.addEventListener('load',()=>{status.hidden=true;});
+      img.addEventListener('error',()=>{
+        status.hidden=false;status.replaceChildren(document.createTextNode(`Page ${n} could not load. `));
+        const retry=button('Retry page','mini-button');
+        retry.addEventListener('click',()=>{status.textContent='Loading page…';img.src=img.dataset.src;});
+        status.append(retry);
+      });
+      frame.append(img,status);sheet.append(caption,frame);stack.append(sheet);
+      pages.push(sheet);observer.observe(sheet);
+    }
+    const updateButtons=()=>{
       previous.disabled=Number(page.value)<=1;next.disabled=Number(page.value)>=data.page_count;
     };
-    img.addEventListener('error',()=>{error.textContent='Page unavailable. The request may no longer be pending, access may have changed, or storage may be unavailable.';});
-    previous.addEventListener('click',()=>{page.value=String(Number(page.value)-1);draw();});
-    next.addEventListener('click',()=>{page.value=String(Number(page.value)+1);draw();});
-    page.addEventListener('change',draw);
-    zoom.addEventListener('change',()=>{img.style.width=`${zoom.value}%`;});
-    const done=button('Return to approval','button primary');done.addEventListener('click',()=>$('form-dialog').close());body.append(done);draw();
+    const jump=number=>{
+      const target=Math.max(1,Math.min(data.page_count,number));
+      page.value=String(target);viewport.scrollTop=pages[target-1].offsetTop;updateButtons();
+    };
+    let frameId=0;
+    viewport.addEventListener('scroll',()=>{
+      if(frameId) return;
+      frameId=requestAnimationFrame(()=>{
+        frameId=0;
+        let low=0,high=pages.length-1;
+        while(low<high){
+          const mid=Math.ceil((low+high)/2);
+          if(pages[mid].offsetTop<=viewport.scrollTop+40) low=mid;else high=mid-1;
+        }
+        page.value=String(low+1);updateButtons();
+      });
+    },{passive:true});
+    previous.addEventListener('click',()=>jump(Number(page.value)-1));
+    next.addEventListener('click',()=>jump(Number(page.value)+1));
+    page.addEventListener('change',()=>jump(Number(page.value)));
+    zoom.addEventListener('change',()=>{const current=Number(page.value);stack.style.width=`${zoom.value}%`;jump(current);});
+    const done=button('Return to approval','button primary');
+    done.addEventListener('click',()=>$('form-dialog').close());body.append(done);
+    $('form-dialog').addEventListener('close',()=>{observer.disconnect();cancelAnimationFrame(frameId);},{once:true});
+    updateButtons();
+
   }
 
   function renderApprovals() {
-    const docs = state.documents.filter(isPending).sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+    const mine = $('review-scope').value === 'mine';
+    const docs = state.documents.filter(doc => isPending(doc) && (!mine || reviewable(doc))).sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
     const list = $('approval-list');
+    if (!docs.length && mine) return empty(list, 'No requests for you to review', 'Choose All pending requests to see other submissions.', 'check');
     if (!docs.length) return empty(list, 'You’re all caught up', 'There are no documents awaiting approval in the folders you can access.', 'check');
     list.replaceChildren();
     for (const doc of docs) {
@@ -740,6 +871,7 @@
       const details = button('View record & metadata', 'mini-button'); details.addEventListener('click', () => openDocumentDetails(doc)); context.append(details);
       card.append(top, context);
       const request = doc.processing_request;
+      if (canCancelRequest(doc)) card.append(cancelRequestButton(request.id));
       const own = sameId(doc.maker_id, state.user?.id) || sameId(request?.maker_id, state.user?.id);
       if (!request || request.status !== 'pending') {
         card.append(el('p', 'approval-lock-note', 'This legacy record needs a fresh maker submission before review. A checker ID alone is not approval.'));
@@ -798,9 +930,9 @@
   }
 
 
-  const stageLabels = { no_request: 'No request', awaiting_checker: 'Awaiting checker', queued: 'Queued', processing: 'Processing', indexed: 'Indexed', failed: 'Failed', cancelled: 'Cancelled', rejected: 'Rejected' };
-  const stageOrder = ['awaiting_checker', 'queued', 'processing', 'indexed', 'failed', 'rejected', 'cancelled'];
-  const stepLabels = { source_fetch: 'Reading source', raw_storage: 'Saving source', parsing: 'Parsing text and tables', visual_enrichment: 'Reading images with VL', asset_storage: 'Saving images', parsed_storage: 'Saving parsed content', chunking: 'Chunking', curated_storage: 'Saving chunks', embedding_guardrails: 'Checking text before embedding', text_embeddings: 'Generating embeddings', indexing: 'Writing search index', publication: 'Publishing', completed: 'Complete' };
+  const stageLabels = { cleaning_up: 'Cleaning up previous file', no_request: 'No request', awaiting_checker: 'Awaiting checker', queued: 'Queued', processing: 'Processing', indexed: 'Indexed', failed: 'Failed', cancelled: 'Cancelled', rejected: 'Rejected' };
+  const stageOrder = ['cleaning_up', 'awaiting_checker', 'queued', 'processing', 'indexed', 'failed', 'rejected', 'cancelled'];
+  const stepLabels = { source_fetch: 'Reading source', raw_storage: 'Saving source', parsing: 'Parsing text and tables', visual_enrichment: 'Reading images with VL', asset_storage: 'Saving images', extracted_storage: 'Saving extraction evidence', parsed_storage: 'Saving parsed content', chunking: 'Chunking', curated_storage: 'Saving chunks', embedding_guardrails: 'Checking text before embedding', text_embeddings: 'Generating embeddings', indexing: 'Writing search index', publication: 'Publishing', completed: 'Complete' };
   function stepText(item) {
     if (!item.current_step) return ({ indexed: 'Published generation available', awaiting_checker: 'Waiting for review', queued: 'Waiting for worker' })[item.stage] || 'Step not recorded';
     const p = item.progress || {};
@@ -862,6 +994,7 @@
       const detail = button('Details', 'mini-button');
       detail.addEventListener('click', () => openIngestionDetails(item));
       actions.append(detail);
+      if (item.can_cancel) actions.append(cancelRequestButton(item.request_id));
       if (item.can_retry) {
         const retry = button('Retry', 'mini-button');
         retry.addEventListener('click', () => retryIngestion(item, retry));
@@ -887,11 +1020,70 @@
     const epoch=state.epoch;
     const data=await api('/api/ingestion');
     if (epoch !== state.epoch || host.dataset.loaded) return;
-    host.replaceChildren(el('p','','Choose an ingestion run to inspect its PDF:'));
-    for(const item of data.items.filter(i=>i.request_id && /\.pdf$/i.test(i.title))) {
-      const choose=button(`${item.title} · ${item.stage}`, 'button secondary');
-      choose.addEventListener('click',()=>openPdfInspector(item).catch(alertError));host.append(choose);
+    const files = data.items.filter(item => item.request_id && /\.pdf$/i.test(item.title))
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
+    if (!files.length) {
+      empty(host, 'No PDFs to inspect', 'PDFs appear here after an ingestion request is created.', 'file');
+      return;
     }
+    const toolbar = el('div', 'section-toolbar');
+    const searchField = el('div', 'search-field');
+    const search = el('input');
+    search.type = 'search';
+    search.placeholder = 'Search filename, folder, or run ID';
+    search.setAttribute('aria-label', search.placeholder);
+    searchField.append(icon('search'), search);
+    const stage = el('select');
+    stage.setAttribute('aria-label', 'Filter by ingestion stage');
+    stage.append(new Option('All stages', ''));
+    for (const value of new Set(files.map(item => item.stage))) {
+      stage.append(new Option(stageLabels[value] || value, value));
+    }
+    toolbar.append(searchField, stage);
+    const card = el('div', 'content-card');
+    const heading = el('div', 'card-heading');
+    const count = el('span', 'small-text muted');
+    count.setAttribute('role', 'status');
+    heading.append(el('h2', '', 'PDF files'), count);
+    const results = el('div', 'table-scroll');
+    card.append(heading, results);
+    host.replaceChildren(toolbar, card);
+
+    function renderFiles() {
+      const query = search.value.trim().toLowerCase();
+      const matches = files.filter(item => (!stage.value || stage.value === item.stage)
+        && [item.title, item.folder_path, item.request_id].some(value => value?.toLowerCase().includes(query)));
+      count.textContent = `${matches.length} of ${files.length} shown`;
+      if (!matches.length) {
+        empty(results, 'No matching PDFs', 'Try another search or choose a different stage.', 'search');
+        return;
+      }
+      const table = el('table');
+      table.setAttribute('aria-label', 'PDF files by most recent submission');
+      const headers = table.createTHead().insertRow();
+      for (const label of ['PDF file', 'Stage', 'Submitted', 'Action']) {
+        const th = el('th', '', label);
+        th.scope = 'col';
+        headers.append(th);
+      }
+      const body = table.createTBody();
+      for (const item of matches) {
+        const row = body.insertRow();
+        row.insertCell().append(el('div', 'document-name', item.title),
+          el('div', 'document-path', `${item.folder_path} · v${item.version}`));
+        row.insertCell().append(stageBadge(item.stage));
+        row.insertCell().append(el('div', '', formatDate(item.created_at, true)),
+          el('div', 'document-path', `Run ${item.request_id.slice(0, 8)}`));
+        const inspect = button('Inspect PDF', 'mini-button');
+        inspect.setAttribute('aria-label', `Inspect ${item.title}, version ${item.version}, run ${item.request_id.slice(0, 8)}`);
+        inspect.addEventListener('click', () => openPdfInspector(item).catch(alertError));
+        row.insertCell().append(inspect);
+      }
+      results.replaceChildren(table);
+    }
+    search.addEventListener('input', renderFiles);
+    stage.addEventListener('change', renderFiles);
+    renderFiles();
   }
   async function openPdfInspector(item) {
     const host = $('pdfdebug-content');
@@ -920,38 +1112,72 @@
     const zoom = el('select'); zoom.setAttribute('aria-label','Zoom');
     [100,150,200].forEach(n => {const o=el('option','',`${n}%`);o.value=n;zoom.append(o);});
     toolbar.append(pageSelect,layer,zoom);host.append(toolbar);
-    const split=el('div','pdf-debug-split'), scroll=el('div','pdf-debug-scroll'), stage=el('div','pdf-debug-stage'), side=el('div','pdf-debug-objects');
-    scroll.append(stage);split.append(scroll,side);host.append(split);
-    let selected=null;
-    let renderedPage=null;
-    const draw = () => {
-      stage.querySelector('svg')?.remove();side.replaceChildren();stage.style.width=`${zoom.value}%`;
-      const objects=data.objects.filter(o=>String(o.page)===pageSelect.value);
-      const b=objects[0].bbox;
-      if(renderedPage!==pageSelect.value) {
-      stage.replaceChildren();renderedPage=pageSelect.value;
-      const img=el('img');img.alt=`Original PDF page ${pageSelect.value}`;
-      img.src=`/api/processing-requests/${encodeURIComponent(item.request_id)}/pdf-layout/page/${pageSelect.value}`;
-      img.addEventListener('error',()=>{side.prepend(el('p','inline-error','Could not load the original PDF page. Check access and storage availability.'));});
-      stage.append(img);
-      }
-      const ns='http://www.w3.org/2000/svg'; const svg=document.createElementNS(ns,'svg');
-      svg.setAttribute('viewBox',`0 0 ${b.page_width} ${b.page_height}`);svg.setAttribute('preserveAspectRatio','none');svg.classList.add('pdf-debug-overlay');stage.append(svg);
-      objects.forEach((obj,i)=>{
+    const split=el('div','pdf-debug-split'), scroll=el('div','pdf-debug-scroll'), side=el('div','pdf-debug-objects');
+    scroll.tabIndex=0;scroll.setAttribute('aria-label','PDF pages, scroll to move between pages');
+    split.append(scroll,side);host.append(split);
+    let selected=null, loadError=false;
+    const ns='http://www.w3.org/2000/svg';
+    const pageViews=new Map();
+    // All pages are stacked in one scrollable area. Each page reserves its real aspect ratio so lazy images do not collapse the layout.
+    pages.forEach(n => {
+      const first=data.objects.find(o=>o.page===n).bbox;
+      const fig=el('figure','pdf-debug-page'); fig.dataset.page=n;
+      const stage=el('div','pdf-debug-stage'); stage.style.aspectRatio=`${first.page_width} / ${first.page_height}`;
+      const img=el('img'); img.alt=`Original PDF page ${n}`; img.loading='lazy'; img.decoding='async';
+      img.src=`/api/processing-requests/${encodeURIComponent(item.request_id)}/pdf-layout/page/${n}`;
+      img.addEventListener('error',()=>{if(!loadError){loadError=true;renderSide();}});
+      stage.append(img);fig.append(el('figcaption','',`Page ${n}`),stage);scroll.append(fig);
+      pageViews.set(n,{fig,stage,bbox:first});
+    });
+    const applyZoom = () => pageViews.forEach(v => { v.stage.style.width=`${zoom.value}%`; });
+    const drawOverlays = () => pageViews.forEach((view,n) => {
+      view.stage.querySelector('svg')?.remove();
+      if(layer.value==='none')return;
+      const b=view.bbox, svg=document.createElementNS(ns,'svg');
+      svg.setAttribute('viewBox',`0 0 ${b.page_width} ${b.page_height}`);svg.setAttribute('preserveAspectRatio','none');svg.classList.add('pdf-debug-overlay');
+      data.objects.filter(o=>o.page===n).forEach((obj,i)=>{
+        const isLayout=obj.extractor==='docling-layout';
+        if((layer.value==='layout'&&!isLayout)||(layer.value==='crops'&&isLayout))return;
+        const box=obj.bbox,color=isLayout?'#2563eb':'#d97706',on=selected===obj.object_id;
+        const rect=document.createElementNS(ns,'rect');
+        for(const [k,v] of Object.entries({x:box.left,y:box.top,width:box.right-box.left,height:box.bottom-box.top,fill:on?'#fde047':'transparent','fill-opacity':on?'.22':'0',stroke:color,'stroke-width':on?3:1}))rect.setAttribute(k,v);
+        rect.style.pointerEvents='all';rect.style.cursor='pointer';rect.addEventListener('click',()=>{selected=obj.object_id;pageSelect.value=n;drawOverlays();renderSide();});svg.append(rect);
+        const label=document.createElementNS(ns,'text');label.setAttribute('x',box.left+2);label.setAttribute('y',Math.min(box.top+11,b.page_height-2));label.setAttribute('font-size','10');label.setAttribute('fill',color);label.setAttribute('stroke','white');label.setAttribute('stroke-width','2');label.setAttribute('paint-order','stroke');label.textContent=`${i+1} ${obj.object_kind}`;svg.append(label);
+      });
+      view.stage.append(svg);
+    });
+    function renderSide() {
+      side.replaceChildren();
+      if(loadError)side.append(el('p','inline-error','Could not load an original PDF page. Check access and storage availability.'));
+      const current=Number(pageSelect.value);
+      side.append(el('h3','',`Page ${current} objects`));
+      let count=0;
+      data.objects.filter(o=>o.page===current).forEach((obj,i)=>{
         const isLayout=obj.extractor==='docling-layout';
         if(layer.value==='none'||(layer.value==='layout'&&!isLayout)||(layer.value==='crops'&&isLayout))return;
-        const box=obj.bbox,color=isLayout?'#2563eb':'#d97706';
-        const rect=document.createElementNS(ns,'rect');
-        for(const [k,v] of Object.entries({x:box.left,y:box.top,width:box.right-box.left,height:box.bottom-box.top,fill:selected===obj.object_id?'#fde047':'transparent','fill-opacity':selected===obj.object_id?'.22':'0',stroke:color,'stroke-width':selected===obj.object_id?3:1}))rect.setAttribute(k,v);
-        rect.style.pointerEvents='all';rect.style.cursor='pointer';rect.addEventListener('click',()=>{selected=obj.object_id;draw();});svg.append(rect);
-        const label=document.createElementNS(ns,'text');label.setAttribute('x',box.left+2);label.setAttribute('y',Math.min(box.top+11,b.page_height-2));label.setAttribute('font-size','10');label.setAttribute('fill',color);label.setAttribute('stroke','white');label.setAttribute('stroke-width','2');label.setAttribute('paint-order','stroke');label.textContent=`${i+1} ${obj.object_kind}`;svg.append(label);
-        const entry=button(`${i+1}. ${obj.object_kind}`, 'button secondary');entry.addEventListener('click',()=>{selected=obj.object_id;draw();});
+        count++;
+        const entry=button(`${i+1}. ${obj.object_kind}`, 'button secondary');entry.addEventListener('click',()=>{selected=obj.object_id;drawOverlays();renderSide();});
         const card=el('div','pdf-debug-object');if(selected===obj.object_id)card.classList.add('selected');
-        card.append(entry,el('p','muted',obj.extractor),el('code','',obj.object_id),el('pre','',JSON.stringify(box,null,2)));side.append(card);
+        card.append(entry,el('p','muted',obj.extractor),el('code','',obj.object_id),el('pre','',JSON.stringify(obj.bbox,null,2)));side.append(card);
       });
-      if(!side.childElementCount) side.append(el('p','muted',layer.value==='none'?'Boxes hidden.':'No objects recorded for this layer on this page.'));
-    };
-    [pageSelect,layer,zoom].forEach(control=>control.addEventListener('change',draw));draw();
+      if(!count) side.append(el('p','muted',layer.value==='none'?'Boxes hidden.':'No objects recorded for this layer on this page.'));
+    }
+    const goToPage = () => { const view=pageViews.get(Number(pageSelect.value)); if(view) scroll.scrollTo({top:view.fig.offsetTop-scroll.offsetTop-8,behavior:'smooth'}); };
+    // Keep the page selector and object list in step with whichever page is mostly in view while scrolling.
+    let ticking=false;
+    scroll.addEventListener('scroll',()=>{
+      if(ticking)return;ticking=true;
+      requestAnimationFrame(()=>{
+        ticking=false;
+        const middle=scroll.scrollTop+scroll.clientHeight/3;let best=null;
+        for(const [n,view] of pageViews){ if(view.fig.offsetTop-scroll.offsetTop<=middle) best=n; else break; }
+        if(best!==null&&String(best)!==pageSelect.value){pageSelect.value=best;renderSide();}
+      });
+    },{passive:true});
+    pageSelect.addEventListener('change',()=>{renderSide();goToPage();});
+    layer.addEventListener('change',()=>{drawOverlays();renderSide();});
+    zoom.addEventListener('change',()=>{applyZoom();goToPage();});
+    applyZoom();drawOverlays();renderSide();
   }
 
   function openIngestionDetails(item) {
@@ -1076,6 +1302,7 @@
       node.setAttribute('aria-pressed', String(sameId(folder.id, state.folderId)));
       const copy = el('span', '', folder.name || folder.path);
       copy.append(el('small', '', folder.path || folder.business_unit || 'Business folder'));
+      if (roles(folder).length) copy.append(el('small', '', `Your access · ${roles(folder).join(', ')}`));
       node.append(icon('folder'), copy);
       node.addEventListener('click', () => selectFolder(folder.id));
       list.append(node);
@@ -1208,6 +1435,7 @@
       renderAudit();
     } catch (error) {
       if (epoch !== state.epoch) return;
+      $('audit-result-count').textContent = '';
       empty($('audit-list'), 'Activity is unavailable', error.message, 'audit');
       throw error;
     }
@@ -1215,6 +1443,7 @@
   function renderAudit() {
     const search = $('audit-search').value.toLowerCase().trim();
     const events = state.events.filter((event) => `${event.action || ''} ${event.actor_id || ''} ${event.target_id || ''} ${safeJSON(event.details)}`.toLowerCase().includes(search));
+    $('audit-result-count').textContent = `${events.length} of ${state.events.length} loaded events`;
     const list = $('audit-list');
     if (!events.length) return empty(list, search ? 'No matching activity' : 'No activity to show yet', search ? 'Try another action, employee ID, or record.' : 'Recorded actions will appear here as your workspace is used.', 'audit');
     list.replaceChildren();
@@ -1234,6 +1463,7 @@
     }
   }
 
+  $('review-scope').addEventListener('change', renderApprovals);
   $('login-form').addEventListener('submit', (event) => {
     event.preventDefault(); $('login-error').hidden = true;
     busy($('login-form'), async () => {

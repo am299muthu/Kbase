@@ -120,6 +120,7 @@ def main():
     setup.add_argument('--demo-documents', action='store_true', help='Also ingest explicitly synthetic policy fixtures.')
     serve = sub.add_parser('serve')
     serve.add_argument('--port', type=int)
+    serve.add_argument('--partial-corpus', action='store_true', help='Keep search on while the index is still being re-populated (startup gate becomes a warning).')
     serve.add_argument('--maintenance', action='store_true', help='Serve approvals/status with chat and the embedded worker paused.')
     sub.add_parser('inventory', help='Count corpus paths and sizes WITHOUT opening their content.')
     ingest = sub.add_parser('ingest', help='Operator-controlled, bounded and idempotent file onboarding.')
@@ -197,6 +198,8 @@ def main():
         import uvicorn
         if args.maintenance:
             os.environ['KB_MAINTENANCE'] = '1'
+        if args.partial_corpus:
+            os.environ['KB_PARTIAL_CORPUS'] = '1'
         uvicorn.run('kb.app:app', host=cfg.host, port=args.port or cfg.port)
     elif args.command == 'inventory':
         files = [path for path in cfg.corpus_dir.rglob('*') if path.is_file() and not path.name.startswith('.')]

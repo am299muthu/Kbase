@@ -51,6 +51,28 @@ def _native_or_blank_page(page, text):
     return all(operator in allowed for _, operator in contents.operations)
 
 
+def _add_positioned_native_text(path, builder, page_text, pdfplumber):
+    # Retain the original page-level extractor output as evidence, while using
+    # positioned native text lines to interleave text with tables and images.
+    builder.extraction_evidence = {'native_page_text': [
+        {'page': number, 'text': text, 'extractor': 'pypdf'} for number, text in page_text.items()],
+        'reading_order': 'page-y-x', 'sequence_base': 0}
+    with pdfplumber.open(path) as pdf:
+        for number, page in enumerate(pdf.pages, 1):
+            lines = page.crop(page.bbox).extract_text_lines(return_chars=False)
+            for index, line in enumerate(lines):
+                if not line['text'].strip():
+                    continue
+                x0, y0 = page.bbox[:2]
+                box = _box((line['x0']-x0, line['top']-y0, line['x1']-x0, line['bottom']-y0), page.width, page.height)
+                builder.add(line['text'], f'Page {number} native text', number, 'text', metadata={
+                    'object_id': f'text:{number}:{index}', 'object_kind': 'text', 'bbox': box,
+                    'extractor': 'pdfplumber-native', 'generated': False})
+            if not lines and page_text[number].strip():
+                # Preserve otherwise unpositioned content; do not invent coordinates.
+                _add_text(builder, page_text[number], f'Page {number} unpositioned text', number)
+
+
 def parse_hybrid_pdf(path: Path, builder) -> None:
     pypdf = _dependency('pypdf')
     pdfplumber = _dependency('pdfplumber')
@@ -68,7 +90,9 @@ def parse_hybrid_pdf(path: Path, builder) -> None:
             page_text[number] = text
             if _native_or_blank_page(page, text):
                 native_pages.add(number)
-            section = _add_text(builder, text, section, number)
+
+
+    _add_positioned_native_text(path, builder, page_text, pdfplumber)
 
     scanned_pages = set()
     if settings().pdf_scanned_vl_enabled:
@@ -81,9 +105,9 @@ def parse_hybrid_pdf(path: Path, builder) -> None:
                     > page.width * page.height * 0.6 for image in page.images)
                 if (sparse_text or raster_page) and number not in native_pages:
                     scanned_pages.add(number)
-    maximum = _limit('PARSER_MAX_PDF_OBJECTS', 100)
+    maximum = _limit('PARSER_MAX_PDF_OBJECTS', 0, allow_zero=True)
     # Refuse an impossible tile budget before rendering a potentially huge PDF.
-    if len(scanned_pages) * 4 > maximum:
+    if maximum and len(scanned_pages) * 4 > maximum:
         raise ParserLimitError('Scanned PDF exceeds PARSER_MAX_PDF_OBJECTS')
     document = _docling_document(path, page_images=True)
     # Geometry only: no extracted text or page pixels in the debug manifest.
@@ -114,7 +138,7 @@ def parse_hybrid_pdf(path: Path, builder) -> None:
         for row, (top, bottom) in enumerate(intervals):
             for column, (left, right) in enumerate(intervals):
                 object_count += 1
-                if object_count > maximum:
+                if maximum and object_count > maximum:
                     raise ParserLimitError('Scanned PDF exceeds PARSER_MAX_PDF_OBJECTS')
                 region = image.crop((int(left * image.width), int(top * image.height),
                                      int(right * image.width), int(bottom * image.height)))
@@ -146,7 +170,7 @@ def parse_hybrid_pdf(path: Path, builder) -> None:
                     continue
                 object_count += 1
                 cell_count += sum(len(row) for row in rows)
-                if object_count > maximum or cell_count > _limit('PARSER_MAX_CELLS', 1000000):
+                if (maximum and object_count > maximum) or cell_count > _limit('PARSER_MAX_CELLS', 1000000):
                     raise ParserLimitError('PDF tables exceed the configured object/cell limits')
                 x0, top, x1, bottom = table.bbox
                 offset_x, offset_y = page.bbox[:2]
@@ -178,8 +202,12 @@ def parse_hybrid_pdf(path: Path, builder) -> None:
             for prov in provenance:
                 if prov.page_no not in scanned_pages and not page_text.get(prov.page_no, '').strip():
                     text = getattr(item, 'text', '')
+                    page = document.pages[prov.page_no]
+                    bounds = prov.bbox.to_top_left_origin(page_height=page.size.height)
                     builder.add(text, f'Page {prov.page_no} Docling supplemental text', prov.page_no, 'text',
-                                metadata={'extractor': 'docling', 'generated': False})
+                                metadata={'object_id': f'text-docling:{item.self_ref}:{prov.page_no}',
+                                          'bbox': _box((bounds.l, bounds.t, bounds.r, bounds.b), page.size.width, page.size.height),
+                                          'extractor': 'docling', 'generated': False})
             continue
         if not provenance:
             raise ParseError('Docling visual object has no page provenance')
@@ -194,7 +222,7 @@ def parse_hybrid_pdf(path: Path, builder) -> None:
             if label == 'table' and any(_overlaps(box, grid) for grid in grids.get(prov.page_no, [])):
                 continue  # The searchable ruled table already has deterministic cell extraction.
             object_count += 1
-            if object_count > maximum:
+            if maximum and object_count > maximum:
                 raise ParserLimitError('PDF exceeds PARSER_MAX_PDF_OBJECTS')
             image = item.get_image(document, prov_index=prov_index)
             if image is None:

@@ -244,7 +244,8 @@ def main():
         allowed = {'LLM_PROVIDER', 'EXTERNAL_MODELS_ENABLED', 'EMBEDDING_BACKEND',
             'OPENSEARCH_INDEX', 'OPENSEARCH_VECTOR_SEARCH', 'PDF_VISION_ENABLED',
             'ALLOW_EXTERNAL_VISION_IMAGES', 'IMAGE_EMBEDDINGS_ENABLED', 'STORAGE_BACKEND',
-            'ALLOW_UNMASKED_EXTERNAL', 'GUARDRAILS_ENABLED'}
+            'ALLOW_UNMASKED_EXTERNAL', 'GUARDRAILS_ENABLED',
+            'OPENSEARCH_BM25_FALLBACK_INDEX', 'OPENSEARCH_HYBRID_FOLDERS'}
         if not values or set(values) - allowed or any(value is None for value in values.values()):
             parser.error('Runtime profile is missing or contains unsupported settings')
         cfg.update(values)

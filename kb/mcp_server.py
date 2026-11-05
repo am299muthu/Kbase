@@ -1,4 +1,5 @@
 """Private stdio MCP server. Identity is bound by the host, never by model arguments."""
+import asyncio
 import os
 
 from mcp.server.fastmcp import FastMCP
@@ -16,8 +17,12 @@ def current(db):
 
 
 @mcp.tool()
-def searchdocuments(query: str, top_k: int = 5) -> dict:
+async def searchdocuments(query: str, top_k: int = 5) -> dict:
     """Retrieve cited evidence ONLY from the signed-in employee's current entitled folders."""
+    return await asyncio.to_thread(_search_for_employee, query, top_k)
+
+
+def _search_for_employee(query, top_k):
     if not query.strip() or len(query) > 4000:
         raise ValueError('Query must contain 1–4000 characters.')
     with db_session() as db:

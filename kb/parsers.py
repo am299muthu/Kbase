@@ -51,6 +51,7 @@ class ParsedDocument:
     assets: list[dict]
     parser: str
     layout_objects: list[dict] = field(default_factory=list)
+    extraction_evidence: dict = field(default_factory=dict)
 
 
 class ParseError(ValueError):
@@ -69,10 +70,10 @@ class ParserLimitError(ParseError):
     """An operator-configured resource limit was exceeded (never truncation)."""
 
 
-def _limit(name: str, default: int) -> int:
+def _limit(name: str, default: int, *, allow_zero: bool = False) -> int:
     value = int(os.environ.get(name, default))
-    if value <= 0:
-        raise ParseError(f"{name} must be positive")
+    if value < 0 or (value == 0 and not allow_zero):
+        raise ParseError(f"{name} must be nonnegative" if allow_zero else f"{name} must be positive")
     return value
 
 
@@ -154,7 +155,7 @@ class _Builder:
     def finish(self) -> ParsedDocument:
         if not self.blocks:
             raise ParseError(f"{self.parser} extracted no indexable content; check encryption, OCR and format")
-        return ParsedDocument(self.blocks, self.assets, self.parser, getattr(self, "layout_objects", []))
+        return ParsedDocument(self.blocks, self.assets, self.parser, getattr(self, "layout_objects", []), getattr(self, "extraction_evidence", {}))
 
 
 def _heading(text: str) -> str | None:
@@ -677,7 +678,11 @@ def _parse_parquet(path: Path, builder: _Builder) -> None:
                     "Structured metadata", kind="metadata")
 
 
+from kb.pdf_render_lock import serialize_pdf_processing
+
+
 @traced('ingestion.parse')
+@serialize_pdf_processing
 def parse_document(path: Path, asset_dir: Path) -> ParsedDocument:
     """Extract a local file or raise ParseError; never download models or run a shell.
 
@@ -783,6 +788,7 @@ def chunk_document(parsed: ParsedDocument, max_chars: int = 1800, overlap: int =
             assets: list[dict] = []
             objects: list[dict] = []
             content_kinds: list[str] = []
+            source_block_indices: list[int] = []
             seen_assets: set[tuple[str, Any]] = set()
             for span_index in range(span_cursor, len(spans)):
                 block_start, block_end, block = spans[span_index]
@@ -790,6 +796,8 @@ def chunk_document(parsed: ParsedDocument, max_chars: int = 1800, overlap: int =
                     break
                 if block_end <= start:
                     continue
+                if 'sequence' in block.metadata and block.metadata['sequence'] not in source_block_indices:
+                    source_block_indices.append(block.metadata['sequence'])
                 if block.kind not in content_kinds:
                     content_kinds.append(block.kind)
                 if block.metadata.get('object_id') and block.metadata not in objects:
@@ -812,7 +820,8 @@ def chunk_document(parsed: ParsedDocument, max_chars: int = 1800, overlap: int =
                 raise ParserLimitError("Chunk count exceeds PARSER_MAX_CHUNKS; increase max_chars or reduce overlap")
             chunk = {"text": text[start:end], "section": blocks[0].section,
                      "page": pages[0] if pages else None, "pages": pages, "assets": assets,
-                     "objects": objects, "content_kinds": content_kinds}
+                     "objects": objects, "content_kinds": content_kinds,
+                     "source_block_indices": source_block_indices, "sequence": len(chunks)}
             visual_assets = [asset for asset in assets if asset.get('object_id') and asset.get('mime_type', '').startswith('image/')]
             if len(visual_assets) > 1:
                 raise ParseError('A visual chunk must reference exactly one object image')
@@ -825,7 +834,8 @@ def chunk_document(parsed: ParsedDocument, max_chars: int = 1800, overlap: int =
 
     for block in parsed.blocks:
         if group and (block.section != group[0].section
-                      or block.metadata.get('object_id') != group[0].metadata.get('object_id')):
+                      or (block.metadata.get('object_id') if block.asset_path else None)
+                         != (group[0].metadata.get('object_id') if group[0].asset_path else None)):
             emit(group)
             group = []
         group.append(block)

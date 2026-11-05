@@ -78,6 +78,8 @@ Use [native infrastructure setup](docs/infrastructure.md) and `scripts/install-n
 
 ### OpenRouter (opt-in)
 
+Application model calls use the OpenAI Python SDK (`OpenAI`) with the configured OpenRouter API key and endpoint. Chat, vision and guardrails use `chat.completions`; embeddings use `embeddings` with float output. OpenRouter-specific routing and reasoning options are passed through `extra_body`. SDK automatic retries are disabled so the application's bounded retries recheck approval on every attempt. This client change preserves the configured models and zero-cost provider routing.
+
 `.env` selects a named `local` or pending `hybrid` runtime profile. Individual flags do not override that profile's gates. The requested external provider is **OpenRouter**; model IDs/dimensions and the rotated API key stay in private `.env`. The compatible multimodal index is now provisioned, but real vectors and current checker/transfer approvals must be verified before selecting hybrid. `serve` refuses an unready hybrid corpus. Requested free-tier model IDs are configuration defaults, **not a guarantee of availability, zero cost, quotas, or measured quality**. See [rollout procedure](docs/governance-and-activation.md).
 
 **Security action:** the original requirement material exposed an API credential. Revoke/rotate it with the provider; never copy it into configuration, screenshots, logs, or repository history. This documentation does not reproduce it. Provider requests are masked by default; do not enable `ALLOW_UNMASKED_EXTERNAL` without approved data-processing governance.
@@ -103,6 +105,8 @@ The PDF parser is `docling_hybrid`: **pypdf text + pdfplumber searchable grid-ta
 CLI `--auto-approve` and operator-supplied `--checker` are now rejected. Onboarding stages a maker request; a separately authenticated checker must review the exact source hash/version and processing/transfer scope. The web process runs an approved-request worker. Existing documents must use exact-ID reprocessing requests rather than another corpus-directory import.
 
 In the UI, a maker uploads to an entitled folder; a different checker approves; the worker parses and indexes it. Owners/delegates manage folder grants and subfolders. Access requests in chat record an audit request only; they never grant permissions.
+
+Uploads detect matching filenames among successfully indexed documents within the destination folder (case-insensitive). Cancelled and other unindexed uploads do not trigger the duplicate prompt. **Keep as new version** preserves existing files and assigns the next version number. **Replace** requires confirmation, cancels old queued requests, removes matching indexed versions from the active library, and schedules deletion of their stored originals, extracted assets, parsed/curated content and entries in the current/fallback search indexes. Audit and request history remain. Replacement is blocked while an old request is processing. Cleanup retries after failures/restarts and appears in the ingestion monitor; new processing waits for cleanup and checker approval.
 
 ### PDF ingestion and governed enrichment
 
@@ -161,3 +165,9 @@ Remaining employees are readers. Each employee initially has only their own root
 ## Boundaries
 
 The prototype has not demonstrated terabyte-scale ingestion, high availability, production authentication, immutable audit storage, complete PII recall, universal file-format support, weekly metadata connectors, or deployment. Regex intent routing is not an autonomous LLM planner. Citation-ID validation does not prove that a claim is semantically supported. Keep the original corpus and all secrets out of published demos unless independently cleared.
+
+### PDF reading order and evidence
+
+New PDF runs order positioned content by page number, then top (Y), then left (X), with stable ties. Generated visual interpretations remain beside their source objects. This geometric order also drives visual enrichment, chunk creation and chunk sequence IDs; it is not a semantic multi-column reading-order inference. Native text is extracted as positioned lines, while the original pypdf page text is retained as evidence. Content without coordinates is preserved at the end of its page and explicitly marked `page-only-fallback`.
+
+Garage retains the original PDF, image assets and `extracted/{document_id}/{request_id}/content.json` before visual-model calls. After enrichment, `raw-parsed/.../content.json` contains the final ordered blocks and `curated/.../chunks.json` contains ordered chunks with sequence numbers and exact source-block references. Failed visual enrichment therefore retains the local extraction evidence. Existing indexed generations require a new approved processing run to gain this ordering.

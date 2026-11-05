@@ -157,6 +157,33 @@ class ObjectStore:
             raise ValueError('Invalid object key')
         return resolved
 
+    def delete_prefix(self, prefix: str):
+        """Delete a document namespace, with a slash boundary and retry-safe deletes."""
+        validate_key(prefix)
+        if self.backend == 'local':
+            root = self.local_path(prefix)
+            if root.exists():
+                for path in root.rglob('*'):
+                    self.local_path(path.relative_to(self.root.resolve()).as_posix())
+                shutil.rmtree(root)
+            return
+        prefix += '/'
+        # Purge versions too on providers that support versioned buckets.
+        try:
+            versioned = self.client.get_bucket_versioning(Bucket=self.cfg.s3_bucket).get('Status') in {'Enabled', 'Suspended'}
+        except Exception as exc:
+            if _error_code(exc) not in {'NotImplemented', '501'}:
+                raise
+            versioned = False
+        operation = 'list_object_versions' if versioned else 'list_objects_v2'
+        for page in self.client.get_paginator(operation).paginate(Bucket=self.cfg.s3_bucket, Prefix=prefix):
+            entries = page.get('Versions', []) + page.get('DeleteMarkers', []) if versioned else page.get('Contents', [])
+            objects = [{'Key': row['Key'], **({'VersionId': row['VersionId']} if versioned else {})} for row in entries]
+            for start in range(0, len(objects), 1000):
+                result = self.client.delete_objects(Bucket=self.cfg.s3_bucket, Delete={'Objects': objects[start:start + 1000], 'Quiet': True})
+                if result.get('Errors'):
+                    raise RuntimeError('Object cleanup incomplete')
+
     def ensure_bucket(self):
         """Check availability only. Application startup must never provision S3."""
         if self.backend == 's3':

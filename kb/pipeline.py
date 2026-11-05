@@ -1,12 +1,11 @@
 from kb.telemetry import traced, operation, event, failure
 import tempfile
-from dataclasses import asdict
 from pathlib import Path
 
 from sqlalchemy import delete, select
 
 from kb.config import settings
-from kb.db import Chunk, Document, Folder, IndexedGeneration, ProcessingRequest, ProcessingProgress, audit, db_session, now
+from kb.db import Chunk, Document, Folder, IndexedGeneration, ProcessingRequest, ProcessingProgress, ReplacementCleanup, audit, db_session, now
 from kb.governance import GovernanceError, digest_json, lock_document, processing_scope, validate_approval, require_hybrid_ingestion
 from kb.parsers import MissingDependency, ParseError, ParserLimitError, chunk_document, parse_document
 from kb.processing_context import bound_processing_transfers
@@ -15,6 +14,7 @@ from kb.progress import report_progress
 from kb.search import chunk_manifest, index_chunks, retention_cutoff
 from kb.storage import ObjectStore, file_digest
 from kb.vision import enrich_pdf_visuals
+from kb.reading_order import order_pdf_blocks, evidence_snapshot
 
 
 def _failure_details(exc, stage):
@@ -75,6 +75,9 @@ def process_request(request_id: str) -> bool:
                 return True  # Idempotent repeat: no parsing, transfer or index writes.
             if request.status != 'approved':
                 return False
+            if db.scalar(select(ReplacementCleanup.document_id).where(
+                    ReplacementCleanup.replacement_id == document_id, ReplacementCleanup.status != 'completed').limit(1)):
+                return False
             # Mark claimed before validation so invalid legacy/changed approvals
             # are failed once rather than permanently spinning in the queue.
             claimed = True
@@ -114,6 +117,7 @@ def process_request(request_id: str) -> bool:
             parsed = parse_document(source, work / 'assets')
             _check_running(request_id)
             if source.suffix == '.pdf':
+                parsed = order_pdf_blocks(parsed)
                 objects = list(parsed.layout_objects)
                 objects.extend({key: asset[key] for key in
                                 ('object_id', 'object_kind', 'page', 'bbox', 'extractor') if key in asset}
@@ -122,9 +126,6 @@ def process_request(request_id: str) -> bool:
                     audit(debug_db, 'pipeline', 'ingestion.pdf_layout', document_id,
                           {'request_id': request_id, 'source_sha256': info['sha256'],
                            'objects': objects, 'coordinate_origin': 'top-left'})
-                stage = 'visual_enrichment'
-                report_progress(stage)
-                parsed = enrich_pdf_visuals(parsed, work / 'assets')
             stage = 'asset_storage'
             report_progress(stage)
             assets = []
@@ -135,16 +136,20 @@ def process_request(request_id: str) -> bool:
                 key = f'assets/{document_id}/{path.name}'
                 assets.append({**asset, 'path': store.uri(key), 'object_key': key})
                 store.put_file(key, path)
-            raw_document = asdict(parsed)
-            asset_uris = {asset['path']: stored['path'] for asset, stored in zip(parsed.assets, assets)}
-            raw_document['assets'] = assets
-            for block in raw_document['blocks']:
-                if block.get('asset_path') in asset_uris:
-                    block['asset_path'] = asset_uris[block['asset_path']]
+            # Persist local extraction before model calls so failures retain evidence.
+            stage = 'extracted_storage'
+            report_progress(stage)
+            extracted_key = f'extracted/{document_id}/{request_id}/content.json'
+            extracted_uri = store.put_json(extracted_key, evidence_snapshot(parsed, assets))
+            if source.suffix == '.pdf':
+                stage = 'visual_enrichment'
+                report_progress(stage)
+                parsed = enrich_pdf_visuals(parsed, work / 'assets')
+                parsed = order_pdf_blocks(parsed)
             parsed_key = f'raw-parsed/{document_id}/{request_id}/content.json'
             stage = 'parsed_storage'
             report_progress(stage)
-            parsed_uri = store.put_json(parsed_key, raw_document)
+            parsed_uri = store.put_json(parsed_key, evidence_snapshot(parsed, assets))
             stage = 'chunking'
             report_progress(stage)
             pieces = chunk_document(parsed, max_chars=cfg.chunk_max_chars, overlap=cfg.chunk_overlap)
@@ -163,7 +168,9 @@ def process_request(request_id: str) -> bool:
                 payloads.append({**piece, 'id': f'{document_id}:{request_id}:{index:06d}', 'document_id': document_id,
                     'generation_id': request_id, 'folder_id': info['folder_id'], 'title': info['title'], 'version': info['version'],
                     'latest_date': info['latest_date'], 'metadata': info['metadata'], 'source_uri': store.uri(raw_key),
-                    'raw_parsed_uri': parsed_uri, 'raw_index_reference': f'{parsed_uri}#/blocks',
+                    'raw_parsed_uri': parsed_uri, 'extracted_uri': extracted_uri,
+                    'raw_index_reference': f'{parsed_uri}#/blocks',
+                    'source_block_references': [f'{parsed_uri}#/blocks/{number}' for number in piece['source_block_indices']],
                     'assets': piece_assets, 'source_sha256': info['sha256'], 'parser': parsed.parser,
                     'curation_method': curation})
             curated_key = f'curated/{document_id}/{request_id}/chunks.json'
@@ -247,10 +254,13 @@ def process_document(document_id: str) -> bool:
 
 
 def process_next() -> bool:
+    from kb.replacement import cleanup_replacement
+    cleanup_replacement()
     if not settings().opensearch_vector_search or not settings().external_models_enabled:
         return False
     with db_session() as db:
         request_id = db.scalar(select(ProcessingRequest.id).where(ProcessingRequest.status == 'approved',
+                               ProcessingRequest.document_id.not_in(select(ReplacementCleanup.replacement_id).where(ReplacementCleanup.status != 'completed')),
                                ProcessingRequest.scope_sha256 == digest_json(processing_scope()))
                                .order_by(ProcessingRequest.created_at).limit(1))
     if request_id:

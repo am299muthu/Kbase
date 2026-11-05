@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -22,13 +23,16 @@ from sqlalchemy.exc import IntegrityError
 
 from kb.agent import answer_question
 from kb.config import ROOT, settings
-from kb.db import Audit, Document, Employee, Folder, Grant, LoginSession, ProcessingRequest, audit, db_session, init_db
-from kb.governance import GovernanceError, MAKER_ROLES, entitled, lock_document, request_json, request_processing, review_request
+from kb.db import Audit, Document, Employee, Folder, Grant, LoginSession, ProcessingRequest, ReplacementCleanup, audit, db_session, init_db
+from kb.governance import GovernanceError, MAKER_ROLES, digest_json, entitled, processing_scope, lock_document, request_json, request_processing, review_request
 from kb.pipeline import process_next
 from kb.reprocess import cancel_request, request_reprocessing
 from kb.search import client as search_client
 from kb.security import ROLES, authenticate, folder_roles, issue_session, password_matches, permitted_folders, pii, require_role
 from kb.storage import ObjectStore, file_digest
+
+# Shared with ingestion: PDFium must not run concurrently across threads.
+from kb.pdf_render_lock import pdf_render_lock as _pdf_render_lock
 
 
 @asynccontextmanager
@@ -42,7 +46,10 @@ async def lifespan(app):
         from kb.runtime import check_hybrid_readiness
         report = await asyncio.to_thread(check_hybrid_readiness)
         if not report['ready']:
-            raise RuntimeError('Hybrid startup blocked: ' + '; '.join(report['blocking']))
+            if os.environ.get('KB_PARTIAL_CORPUS') != '1':
+                raise RuntimeError('Hybrid startup blocked: ' + '; '.join(report['blocking']))
+            # Explicit operator choice (serve --partial-corpus): keep search available while re-indexing continues.
+            logging.getLogger('uvicorn.error').warning('Serving a PARTIAL corpus: %s', '; '.join(report['blocking']))
     async def worker():
         while True:
             try:
@@ -164,6 +171,7 @@ def document_json(db, document, user):
     request = db.scalar(select(ProcessingRequest).where(ProcessingRequest.document_id == document.id)
                         .order_by(ProcessingRequest.created_at.desc()).limit(1))
     result['processing_request'] = request_json(request) if request else None
+    result['cleanup_pending'] = bool(db.scalar(select(ReplacementCleanup.document_id).where(ReplacementCleanup.replacement_id == document.id, ReplacementCleanup.status != 'completed').limit(1)))
     # Technical source/scope digests must not be PII-masked; they are review tokens.
     # IDs and source keys are technical; descriptive content is filtered at all UI exits.
     if not user.pii_unmasked:
@@ -293,13 +301,14 @@ def change_grant(folder_id: str, body: GrantBody, user=Depends(user_context), db
 @app.get('/api/documents')
 def documents(user=Depends(user_context), db=Depends(connection)):
     allowed = permitted_folders(db, user.id)
-    rows = db.scalars(select(Document).where(Document.folder_id.in_(allowed)).order_by(Document.created_at.desc()).limit(500))
+    rows = db.scalars(select(Document).where(Document.folder_id.in_(allowed), Document.status != 'superseded').order_by(Document.created_at.desc()).limit(500))
     return {'documents': [document_json(db, document, user) for document in rows]}
 
 
 @app.post('/api/documents')
-def upload_document(file: UploadFile = File(...), folder_id: str = Form(...), latest_date: str | None = Form(None), metadata: str = Form('{}'), user=Depends(user_context), db=Depends(connection)):
+def upload_document(file: UploadFile = File(...), folder_id: str = Form(...), latest_date: str | None = Form(None), metadata: str = Form('{}'), replace_ids: str = Form('[]'), duplicate_action: str = Form(''), user=Depends(user_context), db=Depends(connection)):
     entitled(db, user.id, folder_id, MAKER_ROLES)
+    db.execute(update(Folder).where(Folder.id == folder_id).values(owner_id=Folder.owner_id))
     folder = db.scalar(select(Folder).where(Folder.id == folder_id).with_for_update())
     title = Path((file.filename or '').replace('\\', '/')).name
     from kb.governance import require_hybrid_ingestion
@@ -318,10 +327,21 @@ def upload_document(file: UploadFile = File(...), folder_id: str = Form(...), la
         raise HTTPException(422, 'Invalid metadata JSON or latest date.')
     if current_date > date.today():
         raise HTTPException(422, 'Latest date cannot be in the future.')
+    try:
+        confirmed_ids = json.loads(replace_ids)
+        if not isinstance(confirmed_ids, list) or any(not isinstance(item, str) for item in confirmed_ids):
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise HTTPException(422, 'Invalid replacement confirmation.')
+    from kb.replacement import replacement_candidates, schedule_replacement, filename_key
+    if duplicate_action not in {'', 'replace', 'version'} or (confirmed_ids and not duplicate_action):
+        raise HTTPException(422, 'Choose replace or keep as a new version.')
+    replaced = replacement_candidates(db, folder_id, title, confirmed_ids, duplicate_action)
     # Business fields are always server-derived, never accepted from the maker.
     business_metadata |= {key: getattr(folder, key) for key in ['business_unit', 'division', 'department', 'region', 'organisation']}
     doc_id = secrets.token_hex(16)
-    version = (db.scalar(select(func.max(Document.version)).where(Document.folder_id == folder_id, Document.title == title)) or 0) + 1
+    versions = db.scalars(select(Document).where(Document.folder_id == folder_id))
+    version = max((doc.version for doc in versions if filename_key(doc.title) == filename_key(title)), default=0) + 1
     with tempfile.NamedTemporaryFile(dir=settings().data_dir, suffix=Path(title).suffix) as temp:
         total = 0
         while part := file.file.read(1024 * 1024):
@@ -345,7 +365,8 @@ def upload_document(file: UploadFile = File(...), folder_id: str = Form(...), la
         raise HTTPException(409, 'A concurrent upload changed this version. Please retry.')
     audit(db, user.id, 'document.uploaded', document.id, {'sha256': digest, 'version': version, 'folder_id': folder_id})
     request_processing(db, document.id, user.id, kind='initial', idempotency_key='upload:' + document.id)
-    return {'document': document_json(db, document, user)}
+    schedule_replacement(db, replaced, document, user.id)
+    return {'document': document_json(db, document, user), 'cleanup_pending': bool(replaced)}
 
 
 @app.post('/api/documents/{document_id}/review')
@@ -418,10 +439,17 @@ def _checker_pdf_preview(request_id, user, db, page_number=None):
     with tempfile.TemporaryDirectory() as temp:
         source = Path(temp) / 'source.pdf'
         ObjectStore().fetch(document.staging_key, source, expected_sha256=request.source_sha256)
-        with pdfium.PdfDocument(str(source)) as pdf:
+        with _pdf_render_lock, pdfium.PdfDocument(str(source)) as pdf:
             page_count = len(pdf)
             if page_number is None:
-                result = {'request_id': request.id, 'page_count': page_count,
+                page_sizes = []
+                for index in range(page_count):
+                    page = pdf[index]
+                    try:
+                        page_sizes.append(list(page.get_size()))
+                    finally:
+                        page.close()
+                result = {'request_id': request.id, 'page_count': page_count, 'page_sizes': page_sizes,
                           'source_sha256': request.source_sha256, 'version': request.source_version}
             else:
                 if not 1 <= page_number <= page_count:
@@ -527,7 +555,7 @@ def pdf_debug_page(request_id: str, page_number: int, user=Depends(user_context)
     with tempfile.TemporaryDirectory() as temp:
         source = Path(temp) / 'source.pdf'
         ObjectStore().fetch(f'raw/{document.folder_id}/{document.id}/{request.id}/original.pdf', source)
-        with pdfium.PdfDocument(str(source)) as pdf:
+        with _pdf_render_lock, pdfium.PdfDocument(str(source)) as pdf:
             if not 1 <= page_number <= len(pdf):
                 raise HTTPException(404, 'Page not found.')
             page = pdf[page_number-1]
@@ -550,7 +578,7 @@ def pdf_debug_page(request_id: str, page_number: int, user=Depends(user_context)
 def ingestion_status(user=Depends(user_context), db=Depends(connection)):
     """Per-document ingestion monitor: latest request, stage and failure diagnostics."""
     allowed = permitted_folders(db, user.id)
-    docs = list(db.scalars(select(Document).where(Document.folder_id.in_(allowed)).order_by(Document.created_at.desc()).limit(500)))
+    docs = list(db.scalars(select(Document).where(Document.folder_id.in_(allowed), Document.status != 'superseded').order_by(Document.created_at.desc()).limit(500)))
     requests = {}
     for request in db.scalars(select(ProcessingRequest).where(ProcessingRequest.document_id.in_([d.id for d in docs]))
                               .order_by(ProcessingRequest.created_at)):
@@ -566,6 +594,7 @@ def ingestion_status(user=Depends(user_context), db=Depends(connection)):
     roles_cache = {}
     items = []
     counts = defaultdict(int)
+    cleanups = {job.replacement_id: job for job in db.scalars(select(ReplacementCleanup).where(ReplacementCleanup.status != 'completed'))}
     for doc in docs:
         request = latest.get(doc.id)
         if doc.folder_id not in roles_cache:
@@ -580,6 +609,8 @@ def ingestion_status(user=Depends(user_context), db=Depends(connection)):
                      'completed': 'indexed', 'cancelled': 'cancelled', 'rejected': 'rejected'}.get(request.status, request.status)
             if doc.status == 'indexed' and request.status in {'cancelled', 'rejected'}:
                 stage = 'indexed'  # A cancelled replacement does not remove the published generation.
+        if doc.id in cleanups:
+            stage = 'cleaning_up'
         counts[stage] += 1
         failure = None
         if request is not None and request.status == 'failed':
@@ -595,7 +626,7 @@ def ingestion_status(user=Depends(user_context), db=Depends(connection)):
                    for r in requests.get(doc.id, [])][-6:]
         current = progress.get(request.id) if request else None
         items.append({'document_id': doc.id, 'title': pii.protect(doc.title, user.pii_unmasked), 'folder_id': doc.folder_id,
-                      'current_step': current.stage if current else (failure or {}).get('stage'),
+                      'current_step': (cleanups[doc.id].error or 'Removing previous files and index entries') if doc.id in cleanups else (current.stage if current else (failure or {}).get('stage')),
                       'progress': current.details if current else {},
                       'progress_updated_at': current.updated_at if current else None,
                       'folder_path': pii.protect(db.get(Folder, doc.folder_id).path, user.pii_unmasked),
@@ -606,6 +637,7 @@ def ingestion_status(user=Depends(user_context), db=Depends(connection)):
                       'created_at': request.created_at if request else doc.created_at,
                       'reviewed_at': request.reviewed_at if request else None,
                       'failure': failure, 'history': history,
+                      'can_cancel': bool(request and request.status in {'pending', 'approved'} and request.maker_id == user.id and roles & set(MAKER_ROLES)),
                       'can_retry': bool(request and request.status == 'failed' and roles & {'owner', 'delegate', 'maker', 'checker'})})
     return {'items': items, 'counts': dict(counts), 'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
 
@@ -643,6 +675,9 @@ def retry_failed_request(request_id: str, user=Depends(user_context), db=Depends
         and approved_config.get('embedding_backend') == 'openrouter'
         and (not document.title.lower().endswith('.pdf') or (
             approved_config.get('pdf_vision_enabled') and approved_config.get('allow_external_vision_images'))))
+    # The approval only carries over if it was granted for exactly the settings the workers run now;
+    # otherwise the worker would skip it forever, so a fresh maker request is created instead.
+    still_approved = still_approved and failed.scope_sha256 == digest_json(processing_scope())
     if still_approved:
         failed.status = 'approved'  # validate_approval accepts approved requests only
         try:
@@ -670,6 +705,8 @@ def retry_failed_request(request_id: str, user=Depends(user_context), db=Depends
 def update_metadata(document_id: str, body: MetadataBody, user=Depends(user_context), db=Depends(connection)):
     document = lock_document(db, document_id)
     entitled(db, user.id, document.folder_id, MAKER_ROLES)
+    if document.status == 'superseded':
+        raise HTTPException(409, 'This file has been replaced.')
     if document.status in {'approved', 'processing'}:
         raise HTTPException(409, 'Cancel pending work or wait for ingestion before updating metadata.')
     if db.scalar(select(ProcessingRequest.id).where(ProcessingRequest.document_id == document.id,
@@ -760,9 +797,12 @@ async def health():
     if settings().opensearch_vector_search and not maintenance:
         from kb.runtime import check_hybrid_readiness
         readiness = await asyncio.to_thread(check_hybrid_readiness)
-        services['search']['status'] = 'ok' if readiness['ready'] else 'unavailable'
+        partial = os.environ.get('KB_PARTIAL_CORPUS') == '1' and not readiness['ready']
+        services['search']['status'] = 'ok' if readiness['ready'] else ('partial' if partial else 'unavailable')
         services['search']['corpus_verified'] = readiness['ready']
         services['search']['verified_chunks'] = readiness['verified_chunks']
+        if partial:
+            services['search']['note'] = 'Serving a partial corpus while re-indexing continues.'
     return {'status': 'maintenance' if maintenance else ('ok' if all(item['status'] == 'ok' for item in services.values()) else 'degraded'),
             'maintenance': maintenance, 'mode': settings().app_mode, 'services': services,
             'model': settings().llm_provider, 'external_models_enabled': settings().external_models_enabled}

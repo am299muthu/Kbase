@@ -45,17 +45,36 @@ class CheckerPdfTests(unittest.TestCase):
         def fetch(key, destination, *, expected_sha256):
             self.assertEqual(key, self.doc.staging_key)
             self.assertEqual(expected_sha256, self.request.source_sha256)
-            writer=PdfWriter();writer.add_blank_page(width=612,height=792)
+            writer=PdfWriter();writer.add_blank_page(width=612,height=792);writer.add_blank_page(width=792,height=612)
             writer.write(destination)
         with patch('kb.app.entitled'), patch('kb.app.audit') as audit, patch('kb.app.ObjectStore') as store:
             store.return_value.fetch.side_effect=fetch
             info=_checker_pdf_preview('req',self.user,self.db)
-            self.assertEqual(info['page_count'],1)
+            self.assertEqual(info['page_count'],2)
+            self.assertEqual(info['page_sizes'], [[612.0,792.0],[792.0,612.0]])
             png=_checker_pdf_preview('req',self.user,self.db,1)
             self.assertTrue(png.startswith(b'\x89PNG'))
             self.assertEqual(audit.call_count,2)
             with self.assertRaises(HTTPException) as error:
-                _checker_pdf_preview('req',self.user,self.db,2)
+                _checker_pdf_preview('req',self.user,self.db,3)
             self.assertEqual(error.exception.status_code,404)
+
+    def test_concurrent_page_requests_render_without_crashing(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from io import BytesIO
+        from kb.app import _checker_pdf_preview
+        from pypdf import PdfWriter
+        writer=PdfWriter()
+        for width,height in [(612,792),(792,612),(612,792)]:
+            writer.add_blank_page(width=width,height=height)
+        source=BytesIO();writer.write(source)
+        def fetch(key,destination,**kwargs):
+            destination.write_bytes(source.getvalue())
+        with patch('kb.app.entitled'),patch('kb.app.audit'),patch('kb.app.ObjectStore') as store:
+            store.return_value.fetch.side_effect=fetch
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                images=list(pool.map(lambda page: _checker_pdf_preview('req',self.user,self.db,page), [1,2,3]*3))
+        self.assertEqual(len(images),9)
+        self.assertTrue(all(image.startswith(b'\x89PNG') for image in images))
 
 if __name__=='__main__': unittest.main()

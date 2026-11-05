@@ -54,7 +54,7 @@ def processing_scope() -> dict:
         'vision_max_page_fraction', 'external_models_enabled', 'allow_unmasked_external',
         'openrouter_base_url', 'openrouter_chat_path', 'openrouter_embedding_path',
         'openrouter_vision_model', 'openrouter_vision_fallback_model', 'openrouter_model', 'guardrails_enabled',
-        'openrouter_guardrail_model', 'guardrail_max_chars', 'guardrail_max_entities',
+        'openrouter_guardrail_model', 'openrouter_paid_max_price_prompt', 'openrouter_paid_max_price_completion', 'guardrail_max_chars', 'guardrail_max_entities',
         'llm_temperature', 'chunk_max_chars', 'chunk_overlap', 'retention_years',
     )
     config = {key: getattr(cfg, key, None) for key in fields}
@@ -63,7 +63,7 @@ def processing_scope() -> dict:
         'PDF_PARSER': 'pypdf', 'OCR_ENABLED': 'false', 'OCR_LANGUAGE': 'eng',
         'OCR_TIMEOUT_SECONDS': '60', 'DOCLING_ARTIFACTS_PATH': '',
         'PARSER_MAX_PAGES': '10000', 'PARSER_MAX_FILE_BYTES': '134217728',
-        'PARSER_MAX_IMAGE_PIXELS': '40000000', 'PARSER_MAX_PDF_OBJECTS': '100',
+        'PARSER_MAX_IMAGE_PIXELS': '40000000', 'PARSER_MAX_PDF_OBJECTS': '0',
         'PARSER_MAX_CELLS': '1000000', 'PARSER_MAX_CHUNKS': '100000',
         'PARSER_MAX_ARCHIVE_ENTRIES': '20000', 'PARSER_MAX_ARCHIVE_BYTES': '268435456',
         'PARSER_MAX_TEXT_CHARS': '20000000', 'PARSER_MAX_BLOCKS': '200000',

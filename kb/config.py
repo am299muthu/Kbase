@@ -97,6 +97,10 @@ class Settings(BaseSettings):
     openrouter_vision_fallback_model: str = ''
     openrouter_embedding_model: str = 'nvidia/nemotron-3.5-embed-1b:free'
     openrouter_image_embedding_model: str = ''
+    # Paid models are used only after every ':free' model in a chain failed, and only with these
+    # ceilings (USD per million tokens). 0 disables paid models entirely (fail closed).
+    openrouter_paid_max_price_prompt: float = 0.0
+    openrouter_paid_max_price_completion: float = 0.0
     llm_temperature: float = 0
     i_retry: int = 1
     e_retry: int = 1
@@ -132,13 +136,38 @@ class Settings(BaseSettings):
         if self.image_embeddings_enabled and (not self.openrouter_image_embedding_model or self.image_embedding_dimensions < 8
                 or self.embedding_backend != 'openrouter' or not self.opensearch_vector_search):
             raise ValueError('Image embeddings require their own model/dimensions and OpenRouter vector search.')
+        if self.openrouter_paid_max_price_prompt < 0 or self.openrouter_paid_max_price_completion < 0:
+            raise ValueError('Paid model price ceilings must not be negative.')
+        if ',' in self.openrouter_embedding_model:
+            raise ValueError('OPENROUTER_EMBEDDING_MODEL must be one model: vectors from different models cannot share a field.')
+        if self.image_embeddings_enabled and ',' in self.openrouter_image_embedding_model:
+            raise ValueError('OPENROUTER_IMAGE_EMBEDDING_MODEL must be one image-capable model when image embeddings are enabled: vectors from different models cannot share a field.')
         if self.vision_max_image_bytes <= 0 or self.vision_max_image_pixels <= 0:
             raise ValueError('Vision image limits must be positive')
-        if not 0 < self.vision_max_page_fraction < 1:
-            raise ValueError('Vision page coverage limit must be between 0 and 1, excluding whole pages')
+        if not 0 < self.vision_max_page_fraction <= 1:
+            raise ValueError('Vision page coverage limit must be in (0, 1]; 1 disables the cap so whole-page objects may be sent')
         return self
 
 
 @lru_cache
 def settings() -> Settings:
     return Settings()
+
+
+def model_chain(*values: str) -> list[str]:
+    """Ordered model IDs from comma-separated settings: ':free' models first, then paid.
+
+    Paid models are dropped unless explicit price ceilings are configured, so a paid model can
+    never be reached by accident. Order inside each group follows the configuration order.
+    """
+    cfg = settings()
+    seen, free, paid = set(), [], []
+    for value in values:
+        for item in str(value or '').split(','):
+            model = item.strip().strip('\'"')
+            if not model or model in seen:
+                continue
+            seen.add(model)
+            (free if model.endswith(':free') else paid).append(model)
+    paid_allowed = cfg.openrouter_paid_max_price_prompt > 0 and cfg.openrouter_paid_max_price_completion > 0
+    return free + (paid if paid_allowed else [])
