@@ -1,3 +1,5 @@
+> Scope update, 2026-11-06: PII detection/redaction and PII visibility gates have been removed from the active pipeline. References to those checks below describe historical runs. Folder authorization and evidence grounding remain active.
+
 # Hybrid PDF and multimodal retrieval pipeline
 
 > **2026-10-27:** Source/scope-bound maker–checker governance, inference PII/grounding guards, VL reading of scanned-page regions, native local S3, durable profiles and the compatible target index are now implemented. Three pilot target-profile requests await checker/direct transfer review; no real PDF enrichment or live hybrid corpus is claimed. See [current rollout and executed checks](governance-and-activation.md). The earlier verification below remains historical.

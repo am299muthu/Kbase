@@ -28,7 +28,7 @@ from kb.governance import GovernanceError, MAKER_ROLES, digest_json, entitled, p
 from kb.pipeline import process_next
 from kb.reprocess import cancel_request, request_reprocessing
 from kb.search import client as search_client
-from kb.security import ROLES, authenticate, folder_roles, issue_session, password_matches, permitted_folders, pii, require_role
+from kb.security import ROLES, authenticate, folder_roles, issue_session, password_matches, permitted_folders, require_role
 from kb.storage import ObjectStore, file_digest
 
 # Shared with ingestion: PDFium must not run concurrently across threads.
@@ -105,7 +105,7 @@ def user_context(request: Request, db=Depends(connection)):
 
 
 def user_json(user):
-    return {'id': user.id, 'name': user.name, 'business_unit': user.business_unit, 'pii_unmasked': user.pii_unmasked}
+    return {'id': user.id, 'name': user.name, 'business_unit': user.business_unit}
 
 
 class LoginBody(BaseModel):
@@ -161,7 +161,7 @@ def validate_metadata(metadata: dict):
 
 def folder_json(db, folder, user):
     result = {key: getattr(folder, key) for key in ['id', 'name', 'path', 'parent_id', 'owner_id', 'business_unit', 'division', 'department', 'region', 'organisation']} | {'roles': sorted(folder_roles(db, user.id, folder.id))}
-    return pii.protect(result, user.pii_unmasked)
+    return result
 
 
 def document_json(db, document, user):
@@ -172,11 +172,6 @@ def document_json(db, document, user):
                         .order_by(ProcessingRequest.created_at.desc()).limit(1))
     result['processing_request'] = request_json(request) if request else None
     result['cleanup_pending'] = bool(db.scalar(select(ReplacementCleanup.document_id).where(ReplacementCleanup.replacement_id == document.id, ReplacementCleanup.status != 'completed').limit(1)))
-    # Technical source/scope digests must not be PII-masked; they are review tokens.
-    # IDs and source keys are technical; descriptive content is filtered at all UI exits.
-    if not user.pii_unmasked:
-        for key in ['title', 'metadata', 'folder_path']:
-            result[key] = pii.protect(result[key])
     return result
 
 
@@ -375,7 +370,7 @@ def review_document(document_id: str, body: ReviewBody, user=Depends(user_contex
     if not request or request.document_id != document_id:
         raise HTTPException(404, 'Processing request not found for this document.')
     review_request(db, request.id, user.id, decision=body.decision, scope_sha256=body.scope_sha256,
-                   note=pii.mask(body.note), control_evidence={key: pii.mask(value) for key, value in body.control_evidence.items()})
+                   note=body.note, control_evidence={key: value for key, value in body.control_evidence.items()})
     return {'document': document_json(db, db.get(Document, document_id), user)}
 
 
@@ -518,8 +513,6 @@ def pdf_layout(request_id: str, user=Depends(user_context), db=Depends(connectio
 
 @app.get('/api/processing-requests/{request_id}/pdf-layout/annotated.pdf')
 def annotated_pdf(request_id: str, layer: str = 'all', user=Depends(user_context), db=Depends(connection)):
-    if not user.pii_unmasked:
-        raise HTTPException(403, 'Original PDF content requires unmasked-content permission. Geometry JSON remains available.')
     if layer not in {'all', 'layout', 'crops'}:
         raise HTTPException(400, 'Choose all, layout or crops.')
     geometry = pdf_layout(request_id, user, db)
@@ -535,8 +528,6 @@ def annotated_pdf(request_id: str, layer: str = 'all', user=Depends(user_context
         content = annotate_pdf(source, geometry['objects'], layer)
     entitled(db, user.id, document.folder_id, {'maker', 'checker', 'owner', 'delegate'})
     db.refresh(user)
-    if not user.pii_unmasked:
-        raise HTTPException(403, 'Unmasked-content permission was revoked.')
     audit(db, user.id, 'ingestion.pdf_debug_download', document.id, {'request_id': request.id, 'layer': layer})
     return Response(content, media_type='application/pdf', headers={
         'Content-Disposition': f'attachment; filename="pdf-layout-{request.id}-{layer}.pdf"',
@@ -545,8 +536,6 @@ def annotated_pdf(request_id: str, layer: str = 'all', user=Depends(user_context
 
 @app.get('/api/processing-requests/{request_id}/pdf-layout/page/{page_number}')
 def pdf_debug_page(request_id: str, page_number: int, user=Depends(user_context), db=Depends(connection)):
-    if not user.pii_unmasked:
-        raise HTTPException(403, 'Original PDF content requires unmasked-content permission.')
     pdf_layout(request_id, user, db)
     request = db.get(ProcessingRequest, request_id)
     document = db.get(Document, request.document_id)
@@ -568,8 +557,6 @@ def pdf_debug_page(request_id: str, page_number: int, user=Depends(user_context)
             page.close()
     entitled(db, user.id, document.folder_id, {'maker', 'checker', 'owner', 'delegate'})
     db.refresh(user)
-    if not user.pii_unmasked:
-        raise HTTPException(403, 'Unmasked-content permission was revoked.')
     audit(db, user.id, 'ingestion.pdf_debug_page', document.id, {'request_id': request.id, 'page': page_number})
     return Response(output.getvalue(), media_type='image/png', headers={'Cache-Control':'no-store'})
 
@@ -618,18 +605,18 @@ def ingestion_status(user=Depends(user_context), db=Depends(connection)):
             can_see = bool(roles & {'owner', 'delegate', 'maker', 'checker'})
             failure = {'message': request.error, 'code': details.get('error_code'), 'stage': details.get('stage'),
                        'error_type': details.get('error_type'),
-                       'detail': pii.mask(details.get('error_detail') or '') if can_see else None,
-                       'model_responses': ([{**entry, 'response': pii.mask(entry.get('response') or '')}
+                       'detail': details.get('error_detail') or '' if can_see else None,
+                       'model_responses': ([{**entry, 'response': entry.get('response') or ''}
                                             for entry in details.get('model_diagnostics', [])] if can_see else []),
                        'diagnostics_visible': can_see}
         history = [{'id': r.id, 'kind': r.kind, 'status': r.status, 'created_at': r.created_at, 'reviewed_at': r.reviewed_at}
                    for r in requests.get(doc.id, [])][-6:]
         current = progress.get(request.id) if request else None
-        items.append({'document_id': doc.id, 'title': pii.protect(doc.title, user.pii_unmasked), 'folder_id': doc.folder_id,
+        items.append({'document_id': doc.id, 'title': doc.title, 'folder_id': doc.folder_id,
                       'current_step': (cleanups[doc.id].error or 'Removing previous files and index entries') if doc.id in cleanups else (current.stage if current else (failure or {}).get('stage')),
                       'progress': current.details if current else {},
                       'progress_updated_at': current.updated_at if current else None,
-                      'folder_path': pii.protect(db.get(Folder, doc.folder_id).path, user.pii_unmasked),
+                      'folder_path': db.get(Folder, doc.folder_id).path,
                       'document_status': doc.status, 'version': doc.version, 'stage': stage,
                       'request_id': request.id if request else None, 'request_kind': request.kind if request else None,
                       'request_status': request.status if request else None,
@@ -740,7 +727,7 @@ def audit_events(user=Depends(user_context), db=Depends(connection)):
     docs = list(db.scalars(select(Document.id).where(Document.folder_id.in_(folders))))
     rows = db.scalars(select(Audit).where((Audit.actor_id == user.id) | Audit.target_id.in_(folders + docs)).order_by(Audit.id.desc()).limit(200))
     return {'events': [{'id': item.id, 'created_at': item.created_at, 'actor_id': item.actor_id, 'action': item.action,
-                        'target_id': item.target_id, 'details': pii.protect(item.details, user.pii_unmasked)} for item in rows]}
+                        'target_id': item.target_id, 'details': item.details} for item in rows]}
 
 
 @app.post('/chat')
@@ -789,10 +776,6 @@ async def health():
                     services['mcp'] = {'status': 'ok', 'tools': len(result.tools), 'transport': 'stdio'}
     except Exception:
         services['mcp'] = {'status': 'unavailable'}
-    services['pii'] = {'status': 'ok' if settings().app_mode == 'demo' or pii.mode != 'rules-only-demo'
-                       or (settings().external_models_enabled and settings().guardrails_enabled) else 'unavailable',
-                       'detector': pii.mode, 'inference_guardrails_enabled': settings().guardrails_enabled and settings().external_models_enabled,
-                       'model_availability_probed': False}
     maintenance = os.environ.get('KB_MAINTENANCE') == '1'
     if settings().opensearch_vector_search and not maintenance:
         from kb.runtime import check_hybrid_readiness

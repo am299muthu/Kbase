@@ -1,3 +1,4 @@
+from kb.timings import capture_chat_timings
 from kb.telemetry import traced, operation, event, failure
 import asyncio
 import hashlib
@@ -13,7 +14,7 @@ from mcp.client.stdio import stdio_client
 from kb.config import ROOT, settings
 from kb.db import audit, db_session
 from kb.providers import AnswerValidationError, ModelUnavailable, plan_questions, synthesize
-from kb.security import authenticate, pii
+from kb.security import authenticate
 
 
 # Only split at explicit boundaries. An ordinary conjunction such as "compare
@@ -39,12 +40,44 @@ def question_parts(message):
     return parts or [message]
 
 
+def is_simple_question(message: str) -> bool:
+    """Conservative fast path; ambiguous or compound requests still use planning."""
+    text = message.strip()
+    if not text or len(text) > 200 or len(text.split()) > 30:
+        return False
+    if re.search(r'[\n\r;:!,/&]|[.。](?:\s|$)|[？]', text):
+        return False
+    if '?' in text.rstrip('?') or text.endswith('??'):
+        return False
+    if re.match(_LIST_MARKER, text) or _DEPENDENT.search(text):
+        return False
+    if re.search(r'\b(and|or|also|then|plus|versus|vs|compare|comparison|both|each|respectively)\b', text, re.I):
+        return False
+    return len(re.findall(r'\b(who|what|when|where|why|how|which|list|give|describe|explain|summari[sz]e)\b', text, re.I)) <= 1
+
+
+async def build_question_plan(message):
+    started = time.perf_counter()
+    if is_simple_question(message):
+        plan, method = [(message.strip(), message.strip())], 'Direct search'
+    else:
+        method = 'LLM'
+        try:
+            plan = await asyncio.to_thread(plan_questions, message)
+        except ModelUnavailable:
+            plan, method = [(part, part) for part in question_parts(message)], 'Local fallback'
+    return plan, {'tool': 'plan_questions', 'arguments': {},
+                  'result': {'method': method, 'parts': [query for _, query in plan]},
+                  'duration_ms': round((time.perf_counter() - started) * 1000)}
+
+
+@capture_chat_timings
 @traced('chat.answer')
 async def answer_question(token: str, message: str, top_k: int = 5) -> dict:
     cfg = settings()
     with db_session() as db:
         user = authenticate(db, token)
-        employee_id, unmasked = user.id, user.pii_unmasked
+        employee_id = user.id
         audit(db, user.id, 'chat.started', user.id, {'question_sha256': hashlib.sha256(message.encode()).hexdigest()})
     event("chat.started", question_sha256=hashlib.sha256(message.encode()).hexdigest())
     trace = []
@@ -57,7 +90,6 @@ async def answer_question(token: str, message: str, top_k: int = 5) -> dict:
         try:
             with db_session() as db:
                 current = authenticate(db, token)
-                safe_unmasked = current.pii_unmasked
                 allowed = set(permitted_folders(db, current.id))
                 traced_ids, traced_folders = set(), set()
                 for step in trace:
@@ -74,27 +106,7 @@ async def answer_question(token: str, message: str, top_k: int = 5) -> dict:
                     return {'answer': 'Access changed while the answer was prepared. Please ask again.', 'citations': [], 'trace': [], 'mode': mode, 'escalation': 'access_changed'}
         except Exception:
             return {'answer': 'Your session or access is no longer available. Please sign in again.', 'citations': [], 'trace': [], 'mode': mode, 'escalation': 'session_unavailable'}
-        payload = pii.protect({'answer': answer, 'citations': citations or [], 'trace': trace, 'mode': mode, 'escalation': escalation}, safe_unmasked)
-        if cfg.external_models_enabled and cfg.guardrails_enabled and not safe_unmasked:
-            from kb.guardrails import protect_with_inference
-            try:
-                payload = await asyncio.to_thread(protect_with_inference, payload)
-            except ModelUnavailable:
-                return {'answer': 'PII inference guardrails could not verify safe output. Content was withheld.',
-                        'citations': [], 'trace': [], 'mode': mode, 'escalation': 'guardrail_unavailable'}
-            # Guardrail inference may take time: recheck access after the last
-            # external call, not just before it, including PII entitlement changes.
-            try:
-                with db_session() as db:
-                    current = authenticate(db, token)
-                    if (current.pii_unmasked != safe_unmasked
-                            or not traced_folders.issubset(set(permitted_folders(db, current.id)))
-                            or any(get_section(db, current.id, ref) is None for ref in traced_ids)):
-                        return {'answer': 'Access changed while the answer was prepared. Please ask again.',
-                                'citations': [], 'trace': [], 'mode': mode, 'escalation': 'access_changed'}
-            except Exception:
-                return {'answer': 'Your session or access is no longer available. Please sign in again.',
-                        'citations': [], 'trace': [], 'mode': mode, 'escalation': 'session_unavailable'}
+        payload = {'answer': answer, 'citations': citations or [], 'trace': trace, 'mode': mode, 'escalation': escalation}
         return payload
 
     if re.search(r'(?i)\b(ignore (?:all |previous |your )*instructions|reveal (?:your |the )?(?:system|prompt)|bypass (?:access|security)|disable (?:masking|guardrails))', message):
@@ -120,8 +132,8 @@ async def answer_question(token: str, message: str, top_k: int = 5) -> dict:
                     if structured is None:
                         text = ''.join(getattr(item, 'text', '') for item in result.content)
                         structured = json.loads(text)
-                    trace.append({'tool': name, 'arguments': pii.protect(arguments or {}, unmasked),
-                                  'result': pii.protect(structured, unmasked), 'duration_ms': round((time.perf_counter() - start) * 1000)})
+                    trace.append({'tool': name, 'arguments': arguments or {},
+                                  'result': structured, 'duration_ms': round((time.perf_counter() - start) * 1000)})
                     return structured
 
                 access = await call('lookupemployeeaccesscontrol')
@@ -134,24 +146,16 @@ async def answer_question(token: str, message: str, top_k: int = 5) -> dict:
                     return await response('Access review requested. No access permissions were changed.' if request['status'] == 'pending_owner_review' else request['message'], escalation=request['status'])
                 folders = await call('listbusinessfolders')
 
-                permission_query = r'(?i)\b(my access|my permissions|which folders|what folders|pii entitlement)\b'
+                permission_query = r'(?i)\b(my access|my permissions|which folders|what folders)\b'
                 plan = [(question, question) for question in questions]
                 if cfg.llm_provider == 'openrouter' and not re.search(permission_query, message):
-                    started = time.perf_counter()
-                    method = 'LLM'
-                    try:
-                        plan = await asyncio.to_thread(plan_questions, message)
-                    except ModelUnavailable:
-                        method = 'Local fallback'
-                    trace.append({'tool': 'plan_questions', 'arguments': {},
-                                  'result': {'method': method, 'parts': [query for _, query in plan]},
-                                  'duration_ms': round((time.perf_counter() - started) * 1000)})
+                    plan, planning_trace = await build_question_plan(message)
+                    trace.append(planning_trace)
 
                 async def answer_part(question, query):
                     if re.search(permission_query, question):
                         lines = [f"{item['path']} ({item['business_unit']})" for item in folders['folders']]
-                        safe = await call('checkpiicompliance', {'text': 'Your authorised folders:\n' + '\n'.join(lines) + '\nPII visibility: ' + ('unmasked' if access['pii_unmasked'] else 'masked')})
-                        return safe['text'], [], None
+                        return 'Your authorised folders:\n' + '\n'.join(lines), [], None
                     found = await call('searchdocuments', {'query': query, 'top_k': top_k})
                     evidence = found['evidence']
                     if not evidence:
@@ -215,7 +219,6 @@ async def answer_question(token: str, message: str, top_k: int = 5) -> dict:
                     try:
                         async with slots:
                             part, references, error = await answer_part(question, query)
-                            part = (await call('checkpiicompliance', {'text': part}))['text']
                     except ModelUnavailable as exc:
                         failure(exc)
                         part, references, error = str(exc), [], 'model_unavailable'

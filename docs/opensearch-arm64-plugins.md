@@ -68,7 +68,7 @@ OPENSEARCH_INDEX=abc-kb-curated-v1
 OPENSEARCH_VECTOR_SEARCH=false
 ```
 
-This service identity can read all KB chunks because it performs application retrieval. **Do not give it to staff or use it as a Dashboards login**: employee folder ACLs and PII masking remain application controls, not per-employee OpenSearch DLS/FLS. Local OS users/admins remain a separate trust boundary. Dashboards Security integration and production identity/TLS provisioning remain separate tasks; Dashboards was not started or reconfigured here.
+This service identity can read all KB chunks because it performs application retrieval. **Do not give it to staff or use it as a Dashboards login**: employee folder ACLs remain application controls, not per-employee OpenSearch DLS/FLS. Local OS users/admins remain a separate trust boundary. Dashboards Security integration and production identity/TLS provisioning remain separate tasks; Dashboards was not started or reconfigured here.
 
 Security audit uses internal OpenSearch storage, with request-body logging disabled and sensitive headers excluded. This is not an immutable external audit sink.
 

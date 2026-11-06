@@ -1,3 +1,5 @@
+> Scope update, 2026-11-06: PII detection/redaction and PII visibility gates have been removed from the active pipeline. References to those checks below describe historical runs. Folder authorization and evidence grounding remain active.
+
 # PDF-pilot rebuild (2026-10-27)
 
 ## Current status (2026-10-28)

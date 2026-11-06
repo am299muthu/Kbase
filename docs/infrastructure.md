@@ -52,7 +52,7 @@ DEMO_PASSWORD=YOUR_UNIQUE_LOCAL_FIXTURE_PASSWORD
 EMBEDDING_BACKEND=hash
 ```
 
-`hash` embeddings are deterministic smoke-test vectors only. For semantic retrieval configure a reviewed embedding provider. Infrastructure output to PII-masked employees fails closed until local spaCy `en_core_web_sm` is provisioned (`pip install '.[pii]'`, then provision the model from an approved source). NER plus rules is still not a compliance guarantee. Establish a validated PII evaluation set and human risk sign-off before production.
+Output uses folder authorization and grounding verification.
 
 ```sh
 .venv/bin/python -m kb.cli init --demo-documents
@@ -65,4 +65,4 @@ OpenSearch retrieval is BM25 by default (`OPENSEARCH_VECTOR_SEARCH=false`). The 
 
 No external calls occur by default. Set `EXTERNAL_MODELS_ENABLED=true` **only after approving external processing**, set `LLM_PROVIDER=openrouter`, and enter a freshly rotated `OPENROUTER_API_KEY`. Free model IDs in the requirements are configuration defaults, **not verified availability guarantees**; inspect OpenRouter's model catalogue and quotas. Configure `EMBEDDING_BACKEND=openrouter` and correct `EMBEDDING_DIMENSIONS` if desired, then use a fresh index and reingest. HTTP errors fail clearly; there is no paid-model fallback.
 
-Egress text is locally PII-masked by default, including embeddings. `ALLOW_UNMASKED_EXTERNAL=true` is a separate opt-in for approved data transfers. Browser PII visibility never implicitly grants third-party transfer permission. Raw/curated storage retains original content. Do not use rule-only demo masking for actual confidential banking records.
+Approved model transfers send text directly. Raw and curated storage retain original content.

@@ -1,3 +1,5 @@
+> Scope update, 2026-11-06: PII detection/redaction and PII visibility gates have been removed from the active pipeline. References to those checks below describe historical runs. Folder authorization and evidence grounding remain active.
+
 # Build verification — 2026-10-26
 
 > Latest 2026-10-27 results: [governed multimodal rollout](governance-and-activation.md). Local S3 migration and the compatible index are now provisioned; real OpenRouter enrichment/hybrid corpus activation remain incomplete. Older sections below are dated history, not current provisioning gaps.

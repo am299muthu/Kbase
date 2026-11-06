@@ -1,3 +1,4 @@
+from kb.timings import collect_timings, measure
 """Private stdio MCP server. Identity is bound by the host, never by model arguments."""
 import asyncio
 import os
@@ -7,7 +8,7 @@ from sqlalchemy import select
 
 from kb.db import Folder, audit, db_session, init_db
 from kb.search import get_section, search_documents
-from kb.security import authenticate, folder_roles, permitted_folders, pii
+from kb.security import authenticate, folder_roles, permitted_folders
 
 mcp = FastMCP('ABC Policy Gateway')
 
@@ -27,10 +28,12 @@ def _search_for_employee(query, top_k):
         raise ValueError('Query must contain 1–4000 characters.')
     with db_session() as db:
         user = current(db)
-        results = search_documents(db, user.id, query, top_k)
-        safe = pii.protect(results, user.pii_unmasked)
+        with collect_timings() as timings:
+            with measure('retrieval_total'):
+                results = search_documents(db, user.id, query, top_k)
+        safe = results
         audit(db, user.id, 'mcp.searchdocuments', user.id, {'result_ids': [item['id'] for item in results]})
-        return {'evidence': safe, 'masking': 'unmasked-entitled' if user.pii_unmasked else pii.mode}
+        return {'timings': timings, 'evidence': safe}
 
 
 @mcp.tool()
@@ -39,16 +42,16 @@ def getdocsection(chunk_id: str) -> dict:
     with db_session() as db:
         user = current(db)
         section = get_section(db, user.id, chunk_id)
-        return {'section': pii.protect(section, user.pii_unmasked)}
+        return {'section': section}
 
 
 @mcp.tool()
 def lookupemployeeaccesscontrol() -> dict:
-    """Read the signed-in employee's mock access control and PII entitlement. No impersonation."""
+    """Read the signed-in employee's mock access control. No impersonation."""
     with db_session() as db:
         user = current(db)
         folders = permitted_folders(db, user.id)
-        return {'employee_id': user.id, 'business_unit': user.business_unit, 'pii_unmasked': user.pii_unmasked,
+        return {'employee_id': user.id, 'business_unit': user.business_unit, 
                 'folders': [{'id': folder_id, 'roles': sorted(folder_roles(db, user.id, folder_id))} for folder_id in folders]}
 
 
@@ -63,17 +66,6 @@ def listbusinessfolders() -> dict:
 
 
 @mcp.tool()
-def checkpiicompliance(text: str) -> dict:
-    """Enforce employee PII masking on outgoing text. Does not grant access or certify compliance."""
-    if len(text) > 50000:
-        raise ValueError('Text is too long.')
-    with db_session() as db:
-        user = current(db)
-        safe = pii.protect(text, user.pii_unmasked)
-        return {'text': safe, 'masked': not user.pii_unmasked, 'detector': pii.mode}
-
-
-@mcp.tool()
 def requestaccess(folder_id: str, reason: str) -> dict:
     """Record an explicitly requested access-review request; NEVER grants access or modifies roles."""
     if not 5 <= len(reason) <= 300:
@@ -82,7 +74,7 @@ def requestaccess(folder_id: str, reason: str) -> dict:
         user = current(db)
         if not db.get(Folder, folder_id):
             return {'status': 'not_found', 'message': 'Contact the Data Office for folder access.'}
-        audit(db, user.id, 'access.review_requested', folder_id, {'requester': user.id, 'reason': pii.mask(reason)})
+        audit(db, user.id, 'access.review_requested', folder_id, {'requester': user.id, 'reason': reason})
         return {'status': 'pending_owner_review', 'folder_id': folder_id, 'access_changed': False}
 
 

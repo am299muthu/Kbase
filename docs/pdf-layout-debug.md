@@ -30,8 +30,7 @@ layout records; orange identifies processing crops. Check that boxes include the
 complete text/table/figure and exclude unrelated nearby content. Scan tiles are
 intentional overlapping regions, not individual semantic objects.
 
-Original pages require folder maker/checker/owner/delegate entitlement **and**
-`pii_unmasked`; E001 currently qualifies. Page access is audited. Existing runs
+Original pages require folder maker/checker/owner/delegate entitlement. Page access is audited. Existing runs
 only contain their previously persisted crop geometry; full text-region layout
 requires a new parse. The source PDF is rendered locally with PDFium, with no
 model call. The original stays unchanged. Annotated PDF downloads are also
@@ -48,7 +47,7 @@ external model calls.
 
 This is a request-specific source-review permission: active folder checkers,
 owners and delegates may view a pending request if they are neither its maker
-nor the source maker. They do not need the global `pii_unmasked` entitlement.
+nor the source maker. Folder roles authorize access.
 This exception does not grant general original-document access to the PDF object
 inspector. Each request checks current folder permission, pending status and
 source/metadata/scope binding before and after rendering; views are audited.

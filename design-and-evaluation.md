@@ -18,14 +18,14 @@ The [architecture and access-control specification](docs/architecture-and-access
 | ObjectStore (`kb/storage.py`) | Governed S3 staging/raw/raw-parsed/assets/curated layers with hashes and streamed verification; current Garage is loopback and application-serialized, not distributed/WORM storage |
 | Parsers + pipeline (`kb/parsers.py`, `kb/pdf_hybrid.py`, `kb/pipeline.py`) | Local pypdf text, pdfplumber grids, Docling objects/scan regions; preserve page/object lineage. Index staged generations before SQL publication; failed replacement preserves the current generation. |
 | Search (`kb/search.py`) | Live OpenSearch BM25/text-k-NN fusion; separate image-k-NN disabled, application ACL/retention/generation filtering and authoritative SQL candidate/section rechecks |
-| Orchestrator (`kb/agent.py`) | Predictable manual intent routing and tool sequences, not autonomous LLM planning; final session/source/folder/PII-entitlement rechecks |
+| Orchestrator (`kb/agent.py`) | Simple-query fast path and bounded LLM planning; final session/source/folder rechecks |
 | MCP client / private server (`kb/mcp_server.py`) | Actual discovery/calls over stdio; identity bound to the authenticated session outside tool arguments |
-| Model + guardrail gateways (`kb/providers.py`, `kb/guardrails.py`) | Active OpenRouter text embeddings/VL/generation; image embeddings disabled with distinct model spaces, local masking before external span detection, checked literal PII offsets and separate supported/relevant claim verdicts |
+| Model + guardrail gateways (`kb/providers.py`, `kb/guardrails.py`) | Active OpenRouter text embeddings/VL/generation; image embeddings disabled with distinct model spaces, separate supported/relevant claim verdicts |
 | Runtime gate (`kb/runtime.py`) | Validate storage, target mappings and current published manifests; target documents require approvals/vectors, while legacy documents retain lexical retrieval; configuration flags alone do not prove readiness |
 
 ### Access-control and ingestion choices
 
-Owner/delegate privileges inherit through the folder hierarchy. Maker/checker/reader grants are exact-folder. Owners/delegates can stage and review, but a checker must differ from **both** source maker and requesting maker. PII visibility is a separate employee flag and never expands folder access or external-transfer rights. Only owners can delegate ownership; delegates manage ordinary grants. Chat access requests audit intent but do not grant access.
+Owner/delegate privileges inherit through the folder hierarchy. Maker/checker/reader grants are exact-folder. Owners/delegates can stage and review, but a checker must differ from **both** source maker and requesting maker. Only owners can delegate ownership; delegates manage ordinary grants. Chat access requests audit intent but do not grant access.
 
 Maker uploads stage an S3 object and a pending `ProcessingRequest`. Authenticated checker approval binds source and target scope. External-domain review requires licence/legal/risk/data-protection evidence references; these are prototype checker attestations, not four independent approval organizations. CLI auto-approval/checker impersonation and maker compliance booleans are rejected.
 
@@ -39,7 +39,7 @@ Default maximum **1,800 characters** with **200-character overlap** uses parser 
 
 The active target uses 2048-dimensional text embeddings; the optional image-model embedding space is separate and disabled. Mappings use Lucene HNSW/cosine and recorded model IDs. Image retrieval embeds query text with the image model, not the text embedding model. Hybrid searches retrieve filtered candidates and fuse reciprocal ranks `1/(60 + rank)`. A one-shard/zero-replica development index is not HA. Hash embeddings are synthetic smoke vectors, not semantic evidence. There is no learned reranker or query-rewriting loop.
 
-Current folder grants, retention and published generations filter retrieval. SQL document/chunk manifests authoritatively recheck source ownership, status, dates and text integrity. Section reads repeat authorization; release rechecks all cited evidence and current PII visibility. This guards stale/orphaned index entries, but does not make object URIs safe public links. Generation-ID term filters and SQLite coordination are prototype-scale choices.
+Current folder grants, retention and published generations filter retrieval. SQL document/chunk manifests authoritatively recheck source ownership, status, dates and text integrity. Section reads repeat authorization; release rechecks all cited evidence. This guards stale/orphaned index entries, but does not make object URIs safe public links. Generation-ID term filters and SQLite coordination are prototype-scale choices.
 
 ### MCP transport, discovery and schemas
 
@@ -47,22 +47,21 @@ For each non-refused request, the orchestrator starts `python -m kb.mcp_server` 
 
 | Tool | Principal inputs | Result / effect |
 |---|---|---|
-| `lookupemployeeaccesscontrol` | `{}` | Current employee, business unit, PII flag, folders and roles |
+| `lookupemployeeaccesscontrol` | `{}` | Current employee, business unit, folders and roles |
 | `listbusinessfolders` | `{}` | Only entitled folder metadata |
 | `searchdocuments` | `query: str`, `top_k: int = 5` | Entitled indexed evidence, masked according to caller |
 | `getdocsection` | `chunk_id: str` | Section or null after fresh entitlement/status/integrity checks |
-| `checkpiicompliance` | `text: str` | Masked/pass-through text and detector flag; not certification |
 | `requestaccess` | `folder_id: str`, `reason: str` | Audit request, `pending_owner_review`, `access_changed: false`; unknown ID returns `not_found` |
 
 ### Agent workflows and safety
 
-**Policy/access:** lookup access → list folders → retrieve evidence → resolve sections → cited generation or labelled extracts → PII/grounding gates as configured → release after session/entitlement/source recheck. “My permissions” uses access lookup/folder listing without policy search.
+**Policy/access:** lookup access → list folders → retrieve evidence → resolve sections → cited generation or labelled extracts → grounding gates as configured → release after session/entitlement/source recheck. “My permissions” uses access lookup/folder listing without policy search.
 
 **Access request:** an explicit message starting `Request access to technology` records a pending-owner-review audit request. No grants change and no owner inbox is implied; owner/delegate grant management is separate.
 
 Fixed injection patterns are refused before MCP startup. No accessible folders/evidence, tool/model failures and revoked access have escalation paths. This is not comprehensive prompt-injection protection or general ambiguity/topic detection. Top-k can retrieve irrelevant material; the earlier evaluation records that weakness rather than claiming universal refusal.
 
-OpenRouter answers use structured cited claims, citation-ID checks and a separate model-based supported/relevant judgement. Inference masking validates literal spans/offsets rather than accepting rewritten text and protects final answers/snippets/traces. Invalid or unavailable checks fail closed. However, an external PII detector already receives a transfer; local rules/optional NER do not guarantee anonymity. Text masking cannot redact image pixels. Model judgements do not prove privacy or entailment. The original ten PDFs were enriched and hybrid-indexed; the full quality evaluation has not run.
+OpenRouter answers use structured claims and independent supported/relevant verdicts. Text passes through without PII detection or redaction. Folder permissions and transfer approvals remain enforced.
 
 ## Evaluation assets and protocol
 
@@ -74,7 +73,7 @@ Four additional k=3/k=8 comparisons for Q021/Q025 supplement baseline k=5 observ
 
 Recommended comparison: hold fixture versions/models/questions fixed; compare k=3 versus k=5. Record source coverage/extraneous citations; duplicate DOCX can crowd out distinct evidence. For performance, measure representative requests, separate cold starts from warm requests, and report sample count, failures and p50/p95 only after measurement. Historical SQLite timings must not be presented as OpenSearch or hybrid measurements.
 
-Remaining evaluation gaps include general clarification, irrelevant top-k results, no calibrated semantic relevance threshold, masking altering required keywords, multi-document diversity and independently measured model-judge/PII/visual accuracy. A model-based grounding check now exists; its implementation is not a completed validation study.
+Remaining evaluation gaps include general clarification, irrelevant top-k results, no calibrated semantic relevance threshold, multi-document diversity and independently measured model-judge/visual accuracy. A model-based grounding check now exists; its implementation is not a completed validation study.
 
 ## Deployment boundary
 

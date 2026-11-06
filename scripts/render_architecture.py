@@ -10,39 +10,41 @@ import math
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-WIDTH, HEIGHT = 2000, 2750
+SHIFT = 420  # vertical room for the chat orchestration region
+WIDTH, HEIGHT = 2000, 2750 + SHIFT
+LEGEND_Y = 2695 + SHIFT
 INK, MUTED, LINE = '#18232D', '#4C5864', '#667581'
 SURFACE, BORDER, REGION = '#FFFFFF', '#BBC5CD', '#F3F5F7'
 TITLE = 'ABC KNOWLEDGE | ARCHITECTURE + ACCESS CONTROL'
-SUBTITLE = '2026-10-29 | Chat: OpenSearch hybrid retrieval | Garage: source files | SQLite: access + publication authority'
+SUBTITLE = '2026-11-06 | Chat: OpenSearch hybrid retrieval | Garage: source files | SQLite: access + publication authority'
 LEGEND = 'Solid: current live path. Dashed: disabled in this profile / future controls. Arrows show representative flows, not every call.'
 
 # Identity and state use labels/line style, not categorical colors.
 BOXES = [
     ('ui', 80, 245, 385, 190, 'Employee browser UI', 'Synthetic employee sign-in\nChat / uploads / approvals\nIngestion monitor: stage, error, retry\nOwner/delegate access management\nNo direct storage/search credentials'),
     ('api', 565, 245, 385, 190, 'FastAPI authentication', 'HttpOnly, SameSite session cookie\nHashed token + expiry in SQLite\nActive employee required\nDemo identity; not enterprise SSO'),
-    ('acl', 1050, 245, 385, 190, 'Application folder ACL', 'Owner/delegate inherit to children\nMaker/checker/reader: exact folder\nPII visibility is a separate flag\nNo role bypasses maker separation'),
+    ('acl', 1050, 245, 385, 190, 'Application folder ACL', 'Owner/delegate inherit to children\nMaker/checker/reader: exact folder\nFolder grants authorize visibility\nNo role bypasses maker separation'),
     ('db', 1535, 245, 385, 190, 'SQLite control authority', 'Employees / sessions / folder grants\nDocuments / processing approvals\nChunk hashes + generation pointers\nAudit hash chain; no chunk text'),
     ('review', 80, 585, 385, 230, 'Maker / checker governance', 'Maker stages source + target scope\nAuthenticated independent checker\nChecker differs from both makers\nHash / version / metadata binding\nParser / models / destination binding\nNo CLI auto-approval or impersonation'),
     ('worker', 565, 585, 385, 230, 'Approved-request worker', 'Only exact runtime-scope matches\nRecheck current roles + source hash\nStage new generation; index first\nThen commit SQL publication pointer\nFailed replacement keeps old data\nFailure keeps model-response excerpts\nRetry re-queues under valid approval'),
-    ('retrieval', 1050, 585, 385, 230, 'Orchestrator + private MCP', 'Deterministic routing; 6 stdio tools\nSession-bound; no caller employee ID\nFolder / retention / generation filters\nSQL rechecks current source + hashes\nSection reads repeat entitlement\nAccess request never grants access'),
-    ('output', 1535, 585, 385, 230, 'Response release controls', 'LIVE: cited generated answers\nLocal rules + inference PII checks\nProtect answer / snippets / traces\nRecheck session + folders at release\nGuard/model failure withholds answer\nFree models can be rate-limited'),
+    ('retrieval', 1050, 585, 385, 230, 'Chat orchestrator (FastAPI)', 'Access / folder questions: fixed routing\nCompound questions: LLM planner\nCalls 5 private MCP tools (stdio)\nSession-bound; no caller employee ID\nSQL rechecks current source + hashes\nAccess request never grants access'),
+    ('output', 1535, 585, 385, 230, 'Response release controls', 'LIVE: cited generated answers\nIndependent grounding verdicts\nValidate cited source evidence\nRecheck session + folders at release\nGuard/model failure withholds answer\nFree models can be rate-limited'),
     ('objects', 80, 980, 385, 220, 'Garage S3 file layers', 'staging / raw / raw-parsed\ncurated / assets; original content\nSHA-256 + streamed readback\nLoopback HTTP; private bucket key\nSerialized-local application writes\nIngestion/reprocessing source files'),
     ('parser', 565, 980, 385, 220, 'Local document processing', 'pypdf: electronic text\npdfplumber: searchable grid cells\nDocling: object detection + crops\nScans: overlapping rendered tiles\nPage / bbox / hash provenance\nDOCX: local text/table extraction'),
-    ('search', 1050, 980, 385, 220, 'OpenSearch hybrid retrieval', 'v2: BM25 + text k-NN retrieval\nv1: legacy lexical candidates\nTLS / local CA / service login\nApplication filters + SQL rechecks\nSQLite is not the content index\nNew ingestion requires real vectors'),
-    ('service', 1535, 980, 385, 220, 'Service access != employee ACL', 'OpenSearch: exact index scopes\nS3: named-bucket read/write only\nCredentials remain server-side\nNeither service enforces folder roles\nNo direct end-user object/index access\nRaw storage is not PII-redacted'),
-    ('gates', 80, 1410, 385, 215, 'External transfer gates', 'Checker-approved transfer scope\nCurrent approved ingestion scope\nRoles rechecked before each retry\nInteractive calls: current session ACL\nLocal text masking before detector\nText masking does not redact pixels'),
-    ('vision', 565, 1410, 385, 215, 'VL interpretation', 'Primary vision model + 429/5xx\nfallback model (schema-checked)\nBounded objects + overlapping scans\nGenerated/unverified readings\nPreserve page / bbox / source hash\nInvalid output fails; none invented'),
-    ('text', 1050, 1410, 385, 215, 'Text embedding space', 'OPENROUTER_EMBEDDING_MODEL\nEMBEDDING_DIMENSIONS = 2048\nMasked text chunks + query\nDedicated vector field / model ID\nLucene HNSW / cosine\nNever mix with image-model vectors'),
+    ('search', 1050, 980, 385, 220, 'OpenSearch hybrid retrieval', 'v3: BM25 + k-NN, 4096 dims (filling)\nv1: legacy lexical candidates\nTLS / local CA / service login\nApplication filters + SQL rechecks\nSQLite is not the content index\nNew ingestion requires real vectors'),
+    ('service', 1535, 980, 385, 220, 'Service access != employee ACL', 'OpenSearch: exact index scopes\nS3: named-bucket read/write only\nCredentials remain server-side\nNeither service enforces folder roles\nNo direct end-user object/index access\nOriginal source content retained'),
+    ('gates', 80, 1410, 385, 215, 'External transfer gates', 'Checker-approved transfer scope\nCurrent approved ingestion scope\nRoles rechecked before each retry\nInteractive calls: current session ACL\nApproved text sent to model\nApproved crops sent to vision model'),
+    ('vision', 565, 1410, 385, 215, 'VL interpretation', 'Free VL chain, then paid Qwen\n429/5xx/bad JSON -> next model\nObjects incl. full-slide images\nGenerated/unverified readings\nPreserve page / bbox / source hash\nInvalid output fails; none invented'),
+    ('text', 1050, 1410, 385, 215, 'Text embedding space', 'OPENROUTER_EMBEDDING_MODEL\nEMBEDDING_DIMENSIONS = 4096\nqwen3-embedding-8b (paid, 1 model)\nDedicated vector field / model ID\nLucene HNSW / cosine\nNever mix with image-model vectors'),
     ('image', 1535, 1410, 385, 215, 'Image embedding space', 'Disabled in pdf-hybrid profile\nImages searchable via VL text only\nSeparate image model when enabled\nDedicated image_vector / model ID\nNever mixed with text vectors\nFull hybrid profile: not active'),
-    ('guardrails', 80, 1715, 385, 205, 'Inference safety checks', 'Literal PII spans + checked offsets\nNo arbitrary model rewrite accepted\nProtect final response + tool traces\nSeparate supported/relevant verdict\nFail closed on malformed judgements\nModel verdicts are not guarantees'),
-    ('generation', 565, 1715, 385, 205, 'Cited OpenRouter inference', 'Configured inference/guardrail model\nFree fallback models; no paid fallback\nStructured claims + valid citation IDs\nGrounding + PII checks before release\nFinal session / source / ACL recheck\nRate limits cause withheld answers'),
-    ('hybrid', 1050, 1715, 385, 205, 'Hybrid ranking: LIVE', 'abc-kb-curated-multimodal-v2\nEvery entitled folder is eligible\nBM25 + text k-NN\nReciprocal rank fusion\nPublished generations only\nCurrent SQL integrity checks retained'),
-    ('ready', 1535, 1715, 385, 205, 'Fail-closed hybrid startup', 'profiles/pdf-hybrid.env profile\nChecks current published corpus\nApprovals / hashes / model vectors\nPreserved demo chunks verified\nInvalid target blocks normal startup\nASGI gate; profile-check exit 2'),
-    ('telemetry', 80, 2110, 590, 220, 'Application telemetry: PLANNED', 'HTTP / chat / MCP / ingestion spans\nBM25, vector and model-call timings\nCorrelated trace IDs and error types\nNo prompt / document / secret payloads\nInstrumentation not activated yet'),
-    ('prepper', 705, 2110, 590, 220, 'Data Prepper: PLANNED', 'OpenTelemetry log + trace sources\nLog indexing + trace processing\nService-map processing\nDedicated observability indexes\nPipelines not deployed yet'),
-    ('dashboards', 1330, 2110, 590, 220, 'OpenSearch Dashboards', 'Current: Query Insights + slow logs\nPlanned: log and trace analytics\nSearch telemetry by trace / request ID\nCorpus index remains separate\nTelemetry is not RAG evidence'),
-    ('prod1', 80, 2480, 590, 155, 'Identity + document protection', 'Enterprise SSO / MFA / managed secrets / KMS\nMalware scanning / OS-level parser isolation\nValidated PII recall + visual-reading evaluation'),
+    ('guardrails', 80, 1715, 385, 205, 'Inference safety checks', 'Structured cited claims\nCheck source IDs and integrity\nValidate each factual claim\nSeparate supported/relevant verdict\nFail closed on malformed judgements\nModel verdicts are not guarantees'),
+    ('generation', 565, 1715, 385, 205, 'Cited OpenRouter inference', 'Free models first, then paid Qwen\nPaid capped by max-price ceilings\nStructured claims + valid citation IDs\nGrounding checks before release\nFinal session / source / ACL recheck\nAll models fail: answer withheld'),
+    ('hybrid', 1050, 1715, 385, 205, 'Hybrid ranking: LIVE (PARTIAL)', 'abc-kb-curated-multimodal-v3\nEvery entitled folder is eligible\nBM25 + text k-NN\nReciprocal rank fusion\nPublished generations only\nCurrent SQL integrity checks retained'),
+    ('ready', 1535, 1715, 385, 205, 'Fail-closed hybrid startup', 'profiles/pdf-hybrid.env profile\nChecks current published corpus\nApprovals / hashes / model vectors\nserve --partial-corpus overrides\nInvalid target blocks normal startup\nASGI gate; profile-check exit 2'),
+    ('telemetry', 80, 2110, 590, 220, 'Application telemetry: OPT-IN', 'HTTP / chat / MCP / ingestion spans\nBM25, vector and model-call timings\nCorrelated trace IDs and error types\nNo prompt / document / secret payloads\nKB_TELEMETRY_ENABLED: off by default'),
+    ('prepper', 705, 2110, 590, 220, 'Data Prepper 2.16: INSTALLED', 'OpenTelemetry log + trace sources\nLog indexing + trace processing\nService-map processing\nDedicated observability indexes\nNot running until started'),
+    ('dashboards', 1330, 2110, 590, 220, 'OpenSearch Dashboards', 'Login required; loopback only\nQuery Insights + slow logs\nLog / trace analytics screens\nSearch telemetry by trace / request ID\nCorpus index remains separate\nTelemetry is not RAG evidence'),
+    ('prod1', 80, 2480, 590, 155, 'Identity + document protection', 'Enterprise SSO / MFA / managed secrets / KMS\nMalware scanning / OS-level parser isolation\nClaim accuracy + visual-reading evaluation'),
     ('prod2', 705, 2480, 590, 155, 'Resilience + operations', 'HA / durable queue / backups and restore drills\nRemote TLS / distributed write coordination\nScale, quotas, model availability and monitoring'),
     ('prod3', 1330, 2480, 590, 155, 'Governance assurance', 'Independent legal / risk / privacy approval identities\nImmutable audit / retention / WORM controls\nFull citation-entailment and security evaluation'),
 ]
@@ -62,7 +64,7 @@ EDGES = [
     ('e11', 'retrieval', 'search', [(1242, 815), (1242, 980)], 'BM25 + k-NN', False),
     ('e12', 'service', 'search', [(1535, 1090), (1435, 1090)], 'service', False),
     ('e13', 'gates', 'vision', [(465, 1515), (565, 1515)], 'pixels', False),
-    ('e14', 'gates', 'guardrails', [(272, 1625), (272, 1715)], 'masked text', False),
+    ('e14', 'gates', 'guardrails', [(272, 1625), (272, 1715)], 'approved text', False),
     ('e15', 'text', 'hybrid', [(1242, 1625), (1242, 1715)], 'text vectors', False),
     ('e16', 'image', 'hybrid', [(1727, 1625), (1727, 1650), (1350, 1650), (1350, 1715)], 'image vectors', True),
     ('e17', 'guardrails', 'generation', [(465, 1818), (565, 1818)], 'checks', False),
@@ -71,8 +73,34 @@ EDGES = [
 REGIONS = [
     ('local', 40, 145, 1920, 1115, 'LIVE SERVING PATH | APPLICATION ACCESS CONTROL + GOVERNED STORAGE', 'Chat evidence comes from OpenSearch; SQLite verifies access and published hashes; Garage holds ingestion files', False),
     ('external', 40, 1310, 1920, 665, 'EXTERNAL MODEL BOUNDARY | APPROVED VL + TEXT EMBEDDINGS + CITED GENERATION', 'All new ingestion requires hybrid processing and matching approval; separate image embeddings remain disabled', False),
-    ('observability', 40, 2025, 1920, 345, 'OBSERVABILITY | EXISTING QUERY INSIGHTS; DATA PREPPER IMPLEMENTATION PENDING', 'Operational telemetry flows separately from corpus ingestion and question answering', True),
+    ('observability', 40, 2025, 1920, 345, 'OBSERVABILITY | QUERY INSIGHTS LIVE; TELEMETRY PIPELINE IMPLEMENTED, OFF BY DEFAULT', 'Operational telemetry flows separately from corpus ingestion and question answering', True),
     ('production', 40, 2415, 1920, 250, 'FUTURE PRODUCTION ASSURANCES | NOT PROVIDED BY THIS LOCAL PROTOTYPE', '', True),
+]
+
+
+def _shift_y(value):
+    return value + SHIFT if value >= 1300 else value
+
+
+BOXES = [(k, x, _shift_y(y), w, h, t, b) for k, x, y, w, h, t, b in BOXES]
+EDGES = [(k, a, b, [(px, _shift_y(py)) for px, py in pts], label, dashed) for k, a, b, pts, label, dashed in EDGES]
+REGIONS = [(k, x, _shift_y(y), w, h, t, sub, d) for k, x, y, w, h, t, sub, d in REGIONS]
+
+# Chat orchestration region (inserted between the local region and the external model boundary)
+REGIONS.insert(1, ('chat', 40, 1310, 1920, 370, 'CHAT ORCHESTRATION | LLM QUESTION PLANNER + PRIVATE MCP TOOLS',
+                   '', False))
+BOXES += [
+    ('planner', 80, 1415, 385, 230, 'LLM question planner', 'Simple question: direct search, no model\nCompound: model splits into up to 6 parts\nParts must reproduce the whole message\nPlanner fails: local split fallback\nPlans only: no tools, no answers\nRuns on the answer-model chain'),
+    ('mcp', 565, 1415, 385, 230, 'Private MCP tools (stdio)', 'searchdocuments: entitled evidence\ngetdocsection: re-checks access, reads\nlookupemployeeaccesscontrol: own roles\nlistbusinessfolders: permitted only\nrequestaccess: records, never grants\nSession via environment, not arguments'),
+    ('parts', 1050, 1415, 385, 230, 'Per-question evidence loop', 'Up to 6 parts, 2 running at a time\nsearchdocuments -> getdocsection\nCited claims generated from sections\nGrounding check + one correction try\nA failed part is reported, not hidden\nMerged answer + source citations'),
+    ('chatout', 1535, 1415, 385, 230, 'Release + trace', 'Recheck session + folder access\nAnswer + citation list to the browser\nTool trace: planner + MCP calls\nAudit event: chat.completed\nTimings: planning, retrieval, generation\nNo access change by any tool'),
+]
+EDGES += [
+    ('e19', 'planner', 'mcp', [(465, 1530), (565, 1530)], 'plan', False),
+    ('e20', 'mcp', 'parts', [(950, 1530), (1050, 1530)], 'evidence', False),
+    ('e21', 'parts', 'chatout', [(1435, 1530), (1535, 1530)], 'answer', False),
+    ('e22', 'mcp', 'search', [(870, 1415), (870, 1240), (1340, 1240), (1340, 1200)], 'searchdocuments', False),
+    ('e23', 'retrieval', 'planner', [(1050, 700), (1000, 700), (1000, 1285), (272, 1285), (272, 1415)], 'questions', True),
 ]
 
 
@@ -107,7 +135,7 @@ def render_xml(destination):
                 ET.SubElement(array, 'mxPoint', x=str(x), y=str(y))
     for key, x, y, w, h, title, body in BOXES:
         vertex(key, x, y, w, h, title + '\n\n' + body, f'rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor={INK};fillColor={SURFACE};strokeColor={BORDER};spacing=12;')
-    vertex('legend', 40, 2695, 1920, 30, LEGEND, 'text;html=0;align=left;fontSize=16;fontColor=' + MUTED)
+    vertex('legend', 40, LEGEND_Y, 1920, 30, LEGEND, 'text;html=0;align=left;fontSize=16;fontColor=' + MUTED)
     ET.indent(mxfile)
     ET.ElementTree(mxfile).write(destination, encoding='utf-8', xml_declaration=True)
 
@@ -179,7 +207,7 @@ def render_png(destination):
             if text_width > w-24 or 52+index*24+22 > h-10:
                 raise ValueError(f'Architecture body exceeds box: {text}')
             draw.text((x+(w-text_width)/2, y+52+index*24), text, fill=MUTED, font=body_font)
-    text_at((40, 2700), LEGEND, 17, fill=MUTED, max_width=1920)
+    text_at((40, LEGEND_Y + 5), LEGEND, 17, fill=MUTED, max_width=1920)
     image.save(destination)
 
 

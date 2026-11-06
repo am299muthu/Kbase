@@ -9,14 +9,14 @@ flows=[
 ('01  INGESTION  |  file to searchable evidence',[
 ('Upload + approval','Maker uploads file + metadata\nGarage: staged original\nSQLite: document + request\nIndependent checker approves'),
 ('Local PDF extraction','pypdf: electronic text\npdfplumber: ruled tables\nDocling: layout + object crops\nScan regions: overlapping tiles'),
-('Visual interpretation','Approved crops → OpenRouter\nVision primary → fallback*\nValidate structured response\nKeep source IDs + bounding boxes'),
-('Chunks + embeddings','Store parsed content + chunks\nLocal PII masking → model check\nValidated text → embedding model\nGuardrail failure stops this run'),
+('Visual interpretation','Approved crops → OpenRouter\nFree VL models → paid Qwen*\nValidate structured response\nKeep source IDs + bounding boxes'),
+('Chunks + embeddings','Store parsed content + chunks\nApproved text → embedding model\nValidate vector dimensions\nGuardrail failure stops this run'),
 ('Index + publish','OpenSearch: text + vectors\nSQLite publishes generation\nOnly published chunks retrieved\nOld generation survives failure')]),
 ('02  QUESTION ANSWERING  |  question to cited answer',[
-('Question + identity','Employee signs in\nFastAPI receives question\nMCP tools resolve folder grants\nSQLite is access authority'),
-('Retrieve evidence','Question → text embedding\nOpenSearch BM25 + text k-NN\nRank fusion combines results\nFilter folders + live generations'),
-('Validate source','SQL checks chunk manifests\nCheck retention + source lineage\nResolve cited evidence sections\nReject stale / unauthorized hits'),
-('Generate + verify','Evidence → OpenRouter answer\nValidate citation IDs\nModel checks claim grounding\nApply output PII rules by access'),
+('Question + planning','Employee signs in; session checked\nSimple ask: straight to search\nCompound ask: LLM planner splits it\nMCP tools resolve folder grants'),
+('Retrieve evidence','MCP searchdocuments, per part\nQuestion → text embedding\nOpenSearch BM25 + text k-NN\nRank fusion + folder filters'),
+('Validate source','MCP getdocsection, per hit\nSQL checks chunk hashes + status\nCheck retention + source lineage\nReject stale / unauthorized hits'),
+('Generate + verify','Evidence → OpenRouter answer\nValidate citation IDs\nModel checks claim grounding\nRecheck current folder access'),
 ('Release answer','Recheck session + permissions\nShow answer + source citations\nExpose permitted tool trace\nWithhold if required checks fail')]),
 ('03  DEBUGGING  |  parallel views of pipeline and search data',[
 ('Capture geometry','After parsing, before model calls\nSQLite audit: PDF layout snapshot\nObject ID + type + page + bbox\nNo PDF text in geometry snapshot'),
@@ -37,7 +37,7 @@ def arrow(x,y):
  d.line((x,y,x+22,y),fill='#52718c',width=2);d.polygon([(x+22,y),(x+15,y-5),(x+15,y+5)],fill='#52718c')
  svg.append(f'<path d="M{x},{y} h22 m-7,-5 l7,5 -7,5" fill="none" stroke="#52718c" stroke-width="2"/>')
 text(45,30,'Knowledge solution · Data flow',38,strong=True)
-text(45,86,'Implementation view · 30 October 2026 · Top lanes: left to right · Debug views: parallel',21,'#526578')
+text(45,86,'Implementation view · 6 November 2026 · Top lanes: left to right · Debug views: parallel',21,'#526578')
 for row,(title,steps) in enumerate(flows):
  y=145+row*290
  text(45,y,title,24,strong=True)
@@ -55,9 +55,9 @@ text(65,1132,'Garage S3  →  files and artifacts          OpenSearch  →  sear
 text(45,1220,'External boundary & failure behavior',24,strong=True)
 notes=[
 'Only approved text/crops go to OpenRouter. Local rendering and the PDF inspector do not call models.',
-'* Vision fallback is configured for HTTP 429 / 502 / 503 / 504. Text PII guardrails currently have no fallback.',
+'* Every model task is an ordered chain: free models first, paid only under price ceilings. A 429, 5xx or invalid reply moves to the next model.',
 'Current pdf-hybrid profile: new writes require real text vectors; retained legacy generations remain readable.',
-'Image embeddings are disabled in this profile. Original PDF inspection requires folder role + unmasked permission.'
+'Image embeddings are disabled in this profile. Original PDF inspection requires folder maker/checker/owner/delegate role.'
 ]
 for i,line in enumerate(notes):text(45,1262+i*34,line,20,'#526578')
 im.save(OUT/'data-flow.png')

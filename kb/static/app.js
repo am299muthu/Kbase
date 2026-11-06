@@ -459,6 +459,43 @@
     });
     node.append(section);
   }
+  function appendTimings(node, result) {
+    if (!Array.isArray(result.timings)) return;
+    const samples = [...result.timings];
+    for (const step of result.trace || []) {
+      if (step.tool === 'searchdocuments') samples.push(...(step.result?.timings || []));
+      if (step.tool === 'plan_questions') samples.push({stage: 'planning', duration_ms: step.duration_ms});
+    }
+    const labels = {
+      chat_total: 'Total server response',
+      planning: 'Question planning',
+      retrieval_total: 'Retrieval total',
+      embedding_api: 'Embedding API',
+      opensearch_mapping: 'OpenSearch mapping check',
+      opensearch_bm25: 'OpenSearch keyword search',
+      opensearch_knn: 'OpenSearch vector search',
+      generation_api: 'Answer generation API',
+      grounding_verification: 'Grounding verification'
+    };
+    const details = el('details', 'trace-details');
+    details.append(el('summary', '', 'Performance breakdown'));
+    details.append(el('p', 'muted', 'Times include retries. Stage totals sum all questions; concurrent and nested stages overlap, so they do not add up to response time.'));
+    const table = el('table');
+    const header = table.createTHead().insertRow();
+    for (const label of ['Stage', 'Calls', 'Time (s)']) {
+      const cell = el('th', '', label); cell.scope = 'col'; header.append(cell);
+    }
+    const body = table.createTBody();
+    for (const [stage, label] of Object.entries(labels)) {
+      const matching = samples.filter(sample => sample.stage === stage);
+      if (!matching.length) continue;
+      const row = body.insertRow();
+      row.insertCell().textContent = label;
+      row.insertCell().textContent = matching.length;
+      row.insertCell().textContent = (matching.reduce((sum, sample) => sum + sample.duration_ms, 0) / 1000).toFixed(2);
+    }
+    details.append(table); node.append(details);
+  }
   function appendTrace(node, trace) {
     if (!Array.isArray(trace) || !trace.length) return;
     const details = el('details', 'trace-details');
@@ -519,6 +556,7 @@
       if (result.mode) setMode(result.mode);
       if (result.escalation) response.append(el('p', 'escalation-note', `Follow-up / escalation: ${typeof result.escalation === 'object' ? safeJSON(result.escalation) : result.escalation}`));
       appendCitations(response, citations, prefix);
+      appendTimings(response, result);
       appendTrace(response, result.trace);
       if (!citations.length) response.append(el('p', 'escalation-note', 'No document citations were returned. Treat this as an operational response or request for clarification, not a verified policy answer.'));
       scrollChatTo(response);
@@ -1097,10 +1135,6 @@
     catch(error) { if(epoch===state.epoch) host.replaceChildren(back,el('p','inline-error',error.message)); return; }
     if(epoch!==state.epoch) return;
     host.replaceChildren(back,el('h2', '', item.title));
-    if (!state.user?.pii_unmasked) {
-      host.append(el('p', 'inline-error', 'Viewing original PDF content requires unmasked-content permission. Use an authorized account such as Alex Demo1 (E001). Geometry remains available in ingestion Details.'));
-      return;
-    }
     if (data.coverage) host.append(el('p', 'muted', data.coverage));
     const pages = [...new Set(data.objects.map(o => o.page))].sort((a,b) => a-b);
     if (!pages.length) { host.append(el('p', '', 'No boxes were recorded for this run.')); return; }

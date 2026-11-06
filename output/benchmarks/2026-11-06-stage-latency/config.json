@@ -1,0 +1,10 @@
+{
+  "openrouter_model": "nvidia/nemotron-3-ultra-550b-a55b:free, qwen/qwen3.8-27b",
+  "openrouter_embedding_model": "qwen/qwen3-embedding-8b",
+  "openrouter_guardrail_model": "",
+  "embedding_dimensions": 4096,
+  "opensearch_vector_search": true,
+  "image_embeddings_enabled": false,
+  "i_retry": 1,
+  "e_retry": 1
+}

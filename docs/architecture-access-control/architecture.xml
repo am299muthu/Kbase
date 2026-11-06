@@ -1,14 +1,14 @@
 <?xml version='1.0' encoding='utf-8'?>
 <mxfile host="app.diagrams.net" version="24.7.17">
   <diagram id="abc-kb" name="Architecture + access control">
-    <mxGraphModel dx="2000" dy="2750" grid="1" gridSize="10" page="1" pageWidth="2000" pageHeight="2750">
+    <mxGraphModel dx="2000" dy="3170" grid="1" gridSize="10" page="1" pageWidth="2000" pageHeight="3170">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
         <mxCell id="title" value="ABC KNOWLEDGE | ARCHITECTURE + ACCESS CONTROL" style="text;html=0;align=left;fontSize=30;fontStyle=1;fontColor=#18232D" vertex="1" parent="1">
           <mxGeometry as="geometry" x="40" y="25" width="1920" height="60" />
         </mxCell>
-        <mxCell id="subtitle" value="2026-10-29 | Chat: OpenSearch hybrid retrieval | Garage: source files | SQLite: access + publication authority" style="text;html=0;align=left;fontSize=18;fontColor=#4C5864" vertex="1" parent="1">
+        <mxCell id="subtitle" value="2026-11-06 | Chat: OpenSearch hybrid retrieval | Garage: source files | SQLite: access + publication authority" style="text;html=0;align=left;fontSize=18;fontColor=#4C5864" vertex="1" parent="1">
           <mxGeometry as="geometry" x="40" y="85" width="1920" height="35" />
         </mxCell>
         <mxCell id="local" value="" style="rounded=1;html=0;fillColor=#F3F5F7;strokeColor=#BBC5CD;dashed=0;" vertex="1" parent="1">
@@ -17,23 +17,29 @@
         <mxCell id="local-header" value="LIVE SERVING PATH | APPLICATION ACCESS CONTROL + GOVERNED STORAGE&#10;Chat evidence comes from OpenSearch; SQLite verifies access and published hashes; Garage holds ingestion files" style="text;whiteSpace=wrap;html=0;align=left;verticalAlign=top;fontSize=18;fontColor=#18232D;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="60" y="157" width="1880" height="65" />
         </mxCell>
+        <mxCell id="chat" value="" style="rounded=1;html=0;fillColor=#F3F5F7;strokeColor=#BBC5CD;dashed=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="1310" width="1920" height="370" />
+        </mxCell>
+        <mxCell id="chat-header" value="CHAT ORCHESTRATION | LLM QUESTION PLANNER + PRIVATE MCP TOOLS" style="text;whiteSpace=wrap;html=0;align=left;verticalAlign=top;fontSize=18;fontColor=#18232D;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="60" y="1322" width="1880" height="35" />
+        </mxCell>
         <mxCell id="external" value="" style="rounded=1;html=0;fillColor=#F3F5F7;strokeColor=#BBC5CD;dashed=0;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="40" y="1310" width="1920" height="665" />
+          <mxGeometry as="geometry" x="40" y="1730" width="1920" height="665" />
         </mxCell>
         <mxCell id="external-header" value="EXTERNAL MODEL BOUNDARY | APPROVED VL + TEXT EMBEDDINGS + CITED GENERATION&#10;All new ingestion requires hybrid processing and matching approval; separate image embeddings remain disabled" style="text;whiteSpace=wrap;html=0;align=left;verticalAlign=top;fontSize=18;fontColor=#18232D;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="60" y="1322" width="1880" height="65" />
+          <mxGeometry as="geometry" x="60" y="1742" width="1880" height="65" />
         </mxCell>
         <mxCell id="observability" value="" style="rounded=1;html=0;fillColor=#F3F5F7;strokeColor=#BBC5CD;dashed=1;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="40" y="2025" width="1920" height="345" />
+          <mxGeometry as="geometry" x="40" y="2445" width="1920" height="345" />
         </mxCell>
-        <mxCell id="observability-header" value="OBSERVABILITY | EXISTING QUERY INSIGHTS; DATA PREPPER IMPLEMENTATION PENDING&#10;Operational telemetry flows separately from corpus ingestion and question answering" style="text;whiteSpace=wrap;html=0;align=left;verticalAlign=top;fontSize=18;fontColor=#18232D;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="60" y="2037" width="1880" height="65" />
+        <mxCell id="observability-header" value="OBSERVABILITY | QUERY INSIGHTS LIVE; TELEMETRY PIPELINE IMPLEMENTED, OFF BY DEFAULT&#10;Operational telemetry flows separately from corpus ingestion and question answering" style="text;whiteSpace=wrap;html=0;align=left;verticalAlign=top;fontSize=18;fontColor=#18232D;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="60" y="2457" width="1880" height="65" />
         </mxCell>
         <mxCell id="production" value="" style="rounded=1;html=0;fillColor=#F3F5F7;strokeColor=#BBC5CD;dashed=1;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="40" y="2415" width="1920" height="250" />
+          <mxGeometry as="geometry" x="40" y="2835" width="1920" height="250" />
         </mxCell>
         <mxCell id="production-header" value="FUTURE PRODUCTION ASSURANCES | NOT PROVIDED BY THIS LOCAL PROTOTYPE" style="text;whiteSpace=wrap;html=0;align=left;verticalAlign=top;fontSize=18;fontColor=#18232D;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="60" y="2427" width="1880" height="35" />
+          <mxGeometry as="geometry" x="60" y="2847" width="1880" height="35" />
         </mxCell>
         <mxCell id="obs1" source="telemetry" target="prepper" value="" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;strokeColor=#667581;strokeWidth=2;dashed=1;fontSize=14;labelBackgroundColor=#F3F5F7;exitX=1.0;exitY=0.5;entryX=0.0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;">
           <mxGeometry as="geometry" relative="1" />
@@ -85,7 +91,7 @@
         <mxCell id="e13" source="gates" target="vision" value="pixels" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;strokeColor=#667581;strokeWidth=2;dashed=0;fontSize=14;labelBackgroundColor=#F3F5F7;exitX=1.0;exitY=0.4883720930232558;entryX=0.0;entryY=0.4883720930232558;exitPerimeter=0;entryPerimeter=0;">
           <mxGeometry as="geometry" relative="1" />
         </mxCell>
-        <mxCell id="e14" source="gates" target="guardrails" value="masked text" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;strokeColor=#667581;strokeWidth=2;dashed=0;fontSize=14;labelBackgroundColor=#F3F5F7;exitX=0.4987012987012987;exitY=1.0;entryX=0.4987012987012987;entryY=0.0;exitPerimeter=0;entryPerimeter=0;">
+        <mxCell id="e14" source="gates" target="guardrails" value="approved text" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;strokeColor=#667581;strokeWidth=2;dashed=0;fontSize=14;labelBackgroundColor=#F3F5F7;exitX=0.4987012987012987;exitY=1.0;entryX=0.4987012987012987;entryY=0.0;exitPerimeter=0;entryPerimeter=0;">
           <mxGeometry as="geometry" relative="1" />
         </mxCell>
         <mxCell id="e15" source="text" target="hybrid" value="text vectors" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;strokeColor=#667581;strokeWidth=2;dashed=0;fontSize=14;labelBackgroundColor=#F3F5F7;exitX=0.4987012987012987;exitY=1.0;entryX=0.4987012987012987;entryY=0.0;exitPerimeter=0;entryPerimeter=0;">
@@ -94,8 +100,8 @@
         <mxCell id="e16" source="image" target="hybrid" value="image vectors" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;strokeColor=#667581;strokeWidth=2;dashed=1;fontSize=14;labelBackgroundColor=#F3F5F7;exitX=0.4987012987012987;exitY=1.0;entryX=0.7792207792207793;entryY=0.0;exitPerimeter=0;entryPerimeter=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="1727" y="1650" />
-              <mxPoint x="1350" y="1650" />
+              <mxPoint x="1727" y="2070" />
+              <mxPoint x="1350" y="2070" />
             </Array>
           </mxGeometry>
         </mxCell>
@@ -105,13 +111,39 @@
         <mxCell id="e18" source="hybrid" target="ready" value="verify" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;strokeColor=#667581;strokeWidth=2;dashed=0;fontSize=14;labelBackgroundColor=#F3F5F7;exitX=1.0;exitY=0.5024390243902439;entryX=0.0;entryY=0.5024390243902439;exitPerimeter=0;entryPerimeter=0;">
           <mxGeometry as="geometry" relative="1" />
         </mxCell>
+        <mxCell id="e19" source="planner" target="mcp" value="plan" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;strokeColor=#667581;strokeWidth=2;dashed=0;fontSize=14;labelBackgroundColor=#F3F5F7;exitX=1.0;exitY=0.5;entryX=0.0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e20" source="mcp" target="parts" value="evidence" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;strokeColor=#667581;strokeWidth=2;dashed=0;fontSize=14;labelBackgroundColor=#F3F5F7;exitX=1.0;exitY=0.5;entryX=0.0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e21" source="parts" target="chatout" value="answer" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;strokeColor=#667581;strokeWidth=2;dashed=0;fontSize=14;labelBackgroundColor=#F3F5F7;exitX=1.0;exitY=0.5;entryX=0.0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e22" source="mcp" target="search" value="searchdocuments" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;strokeColor=#667581;strokeWidth=2;dashed=0;fontSize=14;labelBackgroundColor=#F3F5F7;exitX=0.7922077922077922;exitY=0.0;entryX=0.7532467532467533;entryY=1.0;exitPerimeter=0;entryPerimeter=0;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="870" y="1240" />
+              <mxPoint x="1340" y="1240" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e23" source="retrieval" target="planner" value="questions" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;strokeColor=#667581;strokeWidth=2;dashed=1;fontSize=14;labelBackgroundColor=#F3F5F7;exitX=0.0;exitY=0.5;entryX=0.4987012987012987;entryY=0.0;exitPerimeter=0;entryPerimeter=0;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="1000" y="700" />
+              <mxPoint x="1000" y="1285" />
+              <mxPoint x="272" y="1285" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
         <mxCell id="ui" value="Employee browser UI&#10;&#10;Synthetic employee sign-in&#10;Chat / uploads / approvals&#10;Ingestion monitor: stage, error, retry&#10;Owner/delegate access management&#10;No direct storage/search credentials" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="80" y="245" width="385" height="190" />
         </mxCell>
         <mxCell id="api" value="FastAPI authentication&#10;&#10;HttpOnly, SameSite session cookie&#10;Hashed token + expiry in SQLite&#10;Active employee required&#10;Demo identity; not enterprise SSO" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="565" y="245" width="385" height="190" />
         </mxCell>
-        <mxCell id="acl" value="Application folder ACL&#10;&#10;Owner/delegate inherit to children&#10;Maker/checker/reader: exact folder&#10;PII visibility is a separate flag&#10;No role bypasses maker separation" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+        <mxCell id="acl" value="Application folder ACL&#10;&#10;Owner/delegate inherit to children&#10;Maker/checker/reader: exact folder&#10;Folder grants authorize visibility&#10;No role bypasses maker separation" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="1050" y="245" width="385" height="190" />
         </mxCell>
         <mxCell id="db" value="SQLite control authority&#10;&#10;Employees / sessions / folder grants&#10;Documents / processing approvals&#10;Chunk hashes + generation pointers&#10;Audit hash chain; no chunk text" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
@@ -123,10 +155,10 @@
         <mxCell id="worker" value="Approved-request worker&#10;&#10;Only exact runtime-scope matches&#10;Recheck current roles + source hash&#10;Stage new generation; index first&#10;Then commit SQL publication pointer&#10;Failed replacement keeps old data&#10;Failure keeps model-response excerpts&#10;Retry re-queues under valid approval" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="565" y="585" width="385" height="230" />
         </mxCell>
-        <mxCell id="retrieval" value="Orchestrator + private MCP&#10;&#10;Deterministic routing; 6 stdio tools&#10;Session-bound; no caller employee ID&#10;Folder / retention / generation filters&#10;SQL rechecks current source + hashes&#10;Section reads repeat entitlement&#10;Access request never grants access" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+        <mxCell id="retrieval" value="Chat orchestrator (FastAPI)&#10;&#10;Access / folder questions: fixed routing&#10;Compound questions: LLM planner&#10;Calls 5 private MCP tools (stdio)&#10;Session-bound; no caller employee ID&#10;SQL rechecks current source + hashes&#10;Access request never grants access" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="1050" y="585" width="385" height="230" />
         </mxCell>
-        <mxCell id="output" value="Response release controls&#10;&#10;LIVE: cited generated answers&#10;Local rules + inference PII checks&#10;Protect answer / snippets / traces&#10;Recheck session + folders at release&#10;Guard/model failure withholds answer&#10;Free models can be rate-limited" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+        <mxCell id="output" value="Response release controls&#10;&#10;LIVE: cited generated answers&#10;Independent grounding verdicts&#10;Validate cited source evidence&#10;Recheck session + folders at release&#10;Guard/model failure withholds answer&#10;Free models can be rate-limited" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="1535" y="585" width="385" height="230" />
         </mxCell>
         <mxCell id="objects" value="Garage S3 file layers&#10;&#10;staging / raw / raw-parsed&#10;curated / assets; original content&#10;SHA-256 + streamed readback&#10;Loopback HTTP; private bucket key&#10;Serialized-local application writes&#10;Ingestion/reprocessing source files" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
@@ -135,56 +167,68 @@
         <mxCell id="parser" value="Local document processing&#10;&#10;pypdf: electronic text&#10;pdfplumber: searchable grid cells&#10;Docling: object detection + crops&#10;Scans: overlapping rendered tiles&#10;Page / bbox / hash provenance&#10;DOCX: local text/table extraction" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="565" y="980" width="385" height="220" />
         </mxCell>
-        <mxCell id="search" value="OpenSearch hybrid retrieval&#10;&#10;v2: BM25 + text k-NN retrieval&#10;v1: legacy lexical candidates&#10;TLS / local CA / service login&#10;Application filters + SQL rechecks&#10;SQLite is not the content index&#10;New ingestion requires real vectors" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+        <mxCell id="search" value="OpenSearch hybrid retrieval&#10;&#10;v3: BM25 + k-NN, 4096 dims (filling)&#10;v1: legacy lexical candidates&#10;TLS / local CA / service login&#10;Application filters + SQL rechecks&#10;SQLite is not the content index&#10;New ingestion requires real vectors" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="1050" y="980" width="385" height="220" />
         </mxCell>
-        <mxCell id="service" value="Service access != employee ACL&#10;&#10;OpenSearch: exact index scopes&#10;S3: named-bucket read/write only&#10;Credentials remain server-side&#10;Neither service enforces folder roles&#10;No direct end-user object/index access&#10;Raw storage is not PII-redacted" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+        <mxCell id="service" value="Service access != employee ACL&#10;&#10;OpenSearch: exact index scopes&#10;S3: named-bucket read/write only&#10;Credentials remain server-side&#10;Neither service enforces folder roles&#10;No direct end-user object/index access&#10;Original source content retained" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="1535" y="980" width="385" height="220" />
         </mxCell>
-        <mxCell id="gates" value="External transfer gates&#10;&#10;Checker-approved transfer scope&#10;Current approved ingestion scope&#10;Roles rechecked before each retry&#10;Interactive calls: current session ACL&#10;Local text masking before detector&#10;Text masking does not redact pixels" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="80" y="1410" width="385" height="215" />
+        <mxCell id="gates" value="External transfer gates&#10;&#10;Checker-approved transfer scope&#10;Current approved ingestion scope&#10;Roles rechecked before each retry&#10;Interactive calls: current session ACL&#10;Approved text sent to model&#10;Approved crops sent to vision model" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="80" y="1830" width="385" height="215" />
         </mxCell>
-        <mxCell id="vision" value="VL interpretation&#10;&#10;Primary vision model + 429/5xx&#10;fallback model (schema-checked)&#10;Bounded objects + overlapping scans&#10;Generated/unverified readings&#10;Preserve page / bbox / source hash&#10;Invalid output fails; none invented" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="565" y="1410" width="385" height="215" />
+        <mxCell id="vision" value="VL interpretation&#10;&#10;Free VL chain, then paid Qwen&#10;429/5xx/bad JSON -&gt; next model&#10;Objects incl. full-slide images&#10;Generated/unverified readings&#10;Preserve page / bbox / source hash&#10;Invalid output fails; none invented" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="565" y="1830" width="385" height="215" />
         </mxCell>
-        <mxCell id="text" value="Text embedding space&#10;&#10;OPENROUTER_EMBEDDING_MODEL&#10;EMBEDDING_DIMENSIONS = 2048&#10;Masked text chunks + query&#10;Dedicated vector field / model ID&#10;Lucene HNSW / cosine&#10;Never mix with image-model vectors" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="1050" y="1410" width="385" height="215" />
+        <mxCell id="text" value="Text embedding space&#10;&#10;OPENROUTER_EMBEDDING_MODEL&#10;EMBEDDING_DIMENSIONS = 4096&#10;qwen3-embedding-8b (paid, 1 model)&#10;Dedicated vector field / model ID&#10;Lucene HNSW / cosine&#10;Never mix with image-model vectors" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1050" y="1830" width="385" height="215" />
         </mxCell>
         <mxCell id="image" value="Image embedding space&#10;&#10;Disabled in pdf-hybrid profile&#10;Images searchable via VL text only&#10;Separate image model when enabled&#10;Dedicated image_vector / model ID&#10;Never mixed with text vectors&#10;Full hybrid profile: not active" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="1535" y="1410" width="385" height="215" />
+          <mxGeometry as="geometry" x="1535" y="1830" width="385" height="215" />
         </mxCell>
-        <mxCell id="guardrails" value="Inference safety checks&#10;&#10;Literal PII spans + checked offsets&#10;No arbitrary model rewrite accepted&#10;Protect final response + tool traces&#10;Separate supported/relevant verdict&#10;Fail closed on malformed judgements&#10;Model verdicts are not guarantees" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="80" y="1715" width="385" height="205" />
+        <mxCell id="guardrails" value="Inference safety checks&#10;&#10;Structured cited claims&#10;Check source IDs and integrity&#10;Validate each factual claim&#10;Separate supported/relevant verdict&#10;Fail closed on malformed judgements&#10;Model verdicts are not guarantees" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="80" y="2135" width="385" height="205" />
         </mxCell>
-        <mxCell id="generation" value="Cited OpenRouter inference&#10;&#10;Configured inference/guardrail model&#10;Free fallback models; no paid fallback&#10;Structured claims + valid citation IDs&#10;Grounding + PII checks before release&#10;Final session / source / ACL recheck&#10;Rate limits cause withheld answers" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="565" y="1715" width="385" height="205" />
+        <mxCell id="generation" value="Cited OpenRouter inference&#10;&#10;Free models first, then paid Qwen&#10;Paid capped by max-price ceilings&#10;Structured claims + valid citation IDs&#10;Grounding checks before release&#10;Final session / source / ACL recheck&#10;All models fail: answer withheld" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="565" y="2135" width="385" height="205" />
         </mxCell>
-        <mxCell id="hybrid" value="Hybrid ranking: LIVE&#10;&#10;abc-kb-curated-multimodal-v2&#10;Every entitled folder is eligible&#10;BM25 + text k-NN&#10;Reciprocal rank fusion&#10;Published generations only&#10;Current SQL integrity checks retained" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="1050" y="1715" width="385" height="205" />
+        <mxCell id="hybrid" value="Hybrid ranking: LIVE (PARTIAL)&#10;&#10;abc-kb-curated-multimodal-v3&#10;Every entitled folder is eligible&#10;BM25 + text k-NN&#10;Reciprocal rank fusion&#10;Published generations only&#10;Current SQL integrity checks retained" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1050" y="2135" width="385" height="205" />
         </mxCell>
-        <mxCell id="ready" value="Fail-closed hybrid startup&#10;&#10;profiles/pdf-hybrid.env profile&#10;Checks current published corpus&#10;Approvals / hashes / model vectors&#10;Preserved demo chunks verified&#10;Invalid target blocks normal startup&#10;ASGI gate; profile-check exit 2" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="1535" y="1715" width="385" height="205" />
+        <mxCell id="ready" value="Fail-closed hybrid startup&#10;&#10;profiles/pdf-hybrid.env profile&#10;Checks current published corpus&#10;Approvals / hashes / model vectors&#10;serve --partial-corpus overrides&#10;Invalid target blocks normal startup&#10;ASGI gate; profile-check exit 2" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1535" y="2135" width="385" height="205" />
         </mxCell>
-        <mxCell id="telemetry" value="Application telemetry: PLANNED&#10;&#10;HTTP / chat / MCP / ingestion spans&#10;BM25, vector and model-call timings&#10;Correlated trace IDs and error types&#10;No prompt / document / secret payloads&#10;Instrumentation not activated yet" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="80" y="2110" width="590" height="220" />
+        <mxCell id="telemetry" value="Application telemetry: OPT-IN&#10;&#10;HTTP / chat / MCP / ingestion spans&#10;BM25, vector and model-call timings&#10;Correlated trace IDs and error types&#10;No prompt / document / secret payloads&#10;KB_TELEMETRY_ENABLED: off by default" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="80" y="2530" width="590" height="220" />
         </mxCell>
-        <mxCell id="prepper" value="Data Prepper: PLANNED&#10;&#10;OpenTelemetry log + trace sources&#10;Log indexing + trace processing&#10;Service-map processing&#10;Dedicated observability indexes&#10;Pipelines not deployed yet" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="705" y="2110" width="590" height="220" />
+        <mxCell id="prepper" value="Data Prepper 2.16: INSTALLED&#10;&#10;OpenTelemetry log + trace sources&#10;Log indexing + trace processing&#10;Service-map processing&#10;Dedicated observability indexes&#10;Not running until started" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="705" y="2530" width="590" height="220" />
         </mxCell>
-        <mxCell id="dashboards" value="OpenSearch Dashboards&#10;&#10;Current: Query Insights + slow logs&#10;Planned: log and trace analytics&#10;Search telemetry by trace / request ID&#10;Corpus index remains separate&#10;Telemetry is not RAG evidence" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="1330" y="2110" width="590" height="220" />
+        <mxCell id="dashboards" value="OpenSearch Dashboards&#10;&#10;Login required; loopback only&#10;Query Insights + slow logs&#10;Log / trace analytics screens&#10;Search telemetry by trace / request ID&#10;Corpus index remains separate&#10;Telemetry is not RAG evidence" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1330" y="2530" width="590" height="220" />
         </mxCell>
-        <mxCell id="prod1" value="Identity + document protection&#10;&#10;Enterprise SSO / MFA / managed secrets / KMS&#10;Malware scanning / OS-level parser isolation&#10;Validated PII recall + visual-reading evaluation" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="80" y="2480" width="590" height="155" />
+        <mxCell id="prod1" value="Identity + document protection&#10;&#10;Enterprise SSO / MFA / managed secrets / KMS&#10;Malware scanning / OS-level parser isolation&#10;Claim accuracy + visual-reading evaluation" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="80" y="2900" width="590" height="155" />
         </mxCell>
         <mxCell id="prod2" value="Resilience + operations&#10;&#10;HA / durable queue / backups and restore drills&#10;Remote TLS / distributed write coordination&#10;Scale, quotas, model availability and monitoring" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="705" y="2480" width="590" height="155" />
+          <mxGeometry as="geometry" x="705" y="2900" width="590" height="155" />
         </mxCell>
         <mxCell id="prod3" value="Governance assurance&#10;&#10;Independent legal / risk / privacy approval identities&#10;Immutable audit / retention / WORM controls&#10;Full citation-entailment and security evaluation" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="1330" y="2480" width="590" height="155" />
+          <mxGeometry as="geometry" x="1330" y="2900" width="590" height="155" />
+        </mxCell>
+        <mxCell id="planner" value="LLM question planner&#10;&#10;Simple question: direct search, no model&#10;Compound: model splits into up to 6 parts&#10;Parts must reproduce the whole message&#10;Planner fails: local split fallback&#10;Plans only: no tools, no answers&#10;Runs on the answer-model chain" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="80" y="1415" width="385" height="230" />
+        </mxCell>
+        <mxCell id="mcp" value="Private MCP tools (stdio)&#10;&#10;searchdocuments: entitled evidence&#10;getdocsection: re-checks access, reads&#10;lookupemployeeaccesscontrol: own roles&#10;listbusinessfolders: permitted only&#10;requestaccess: records, never grants&#10;Session via environment, not arguments" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="565" y="1415" width="385" height="230" />
+        </mxCell>
+        <mxCell id="parts" value="Per-question evidence loop&#10;&#10;Up to 6 parts, 2 running at a time&#10;searchdocuments -&gt; getdocsection&#10;Cited claims generated from sections&#10;Grounding check + one correction try&#10;A failed part is reported, not hidden&#10;Merged answer + source citations" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1050" y="1415" width="385" height="230" />
+        </mxCell>
+        <mxCell id="chatout" value="Release + trace&#10;&#10;Recheck session + folder access&#10;Answer + citation list to the browser&#10;Tool trace: planner + MCP calls&#10;Audit event: chat.completed&#10;Timings: planning, retrieval, generation&#10;No access change by any tool" style="rounded=1;whiteSpace=wrap;html=0;fontSize=17;fontColor=#18232D;fillColor=#FFFFFF;strokeColor=#BBC5CD;spacing=12;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1535" y="1415" width="385" height="230" />
         </mxCell>
         <mxCell id="legend" value="Solid: current live path. Dashed: disabled in this profile / future controls. Arrows show representative flows, not every call." style="text;html=0;align=left;fontSize=16;fontColor=#4C5864" vertex="1" parent="1">
-          <mxGeometry as="geometry" x="40" y="2695" width="1920" height="30" />
+          <mxGeometry as="geometry" x="40" y="3115" width="1920" height="30" />
         </mxCell>
       </root>
     </mxGraphModel>

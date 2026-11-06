@@ -1,3 +1,5 @@
+> Scope update, 2026-11-06: PII detection/redaction and PII visibility gates have been removed from the active pipeline. References to those checks below describe historical runs. Folder authorization and evidence grounding remain active.
+
 # OpenRouter activation — prepared, not live
 
 > **2026-10-27 update:** A fresh compatible `abc-kb-curated-multimodal-v2` and its explicitly approved service scope are now provisioned. Files use native local S3, staff/access controls remain SQLite, and the three pilot target-profile requests await independent checker review. Durable profiles replace ad-hoc restart flags. Real OpenRouter transfer and hybrid corpus population remain blocked/incomplete. Follow [the current governed rollout](governance-and-activation.md); the older commands below are historical, not the current activation procedure.

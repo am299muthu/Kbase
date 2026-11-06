@@ -57,7 +57,7 @@ class ProviderSdkTests(unittest.TestCase):
 
     def test_embeddings_request_float_vectors(self):
         self.responses=[httpx.Response(200,json={'data':[{'index':0,'embedding':[0.1,0.2]}]})]
-        result=model_request(self.cfg.openrouter_embedding_path,{'model':'embed/model','input':['synthetic']},0)
+        result=model_request(self.cfg.openrouter_embedding_path,{'model':'embed/model:free','input':['synthetic']},0)
         self.assertEqual(result['data'][0]['embedding'],[0.1,0.2])
         self.assertEqual(self.requests[0].url.path,'/api/v1/embeddings')
         self.assertEqual(json.loads(self.requests[0].content)['encoding_format'],'float')

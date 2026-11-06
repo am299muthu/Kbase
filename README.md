@@ -2,7 +2,7 @@
 
 **Latest rollout (2026-10-28):** Hybrid search is active: the original ten rebuilt PDFs have 273 verified vector chunks. All new uploads and ingestion requests require BM25 + real embeddings; PDFs also require native text parsing and VL image processing. SQLite stores controls and Garage stores files. Five later PDFs failed hybrid reprocessing (four guardrail failures, one VL-output failure); their old generations were preserved. The **Ingestion monitor** shows steps, progress, request history and captured errors. See [current batch and processing policy](docs/pdf-pilot-rebuild.md).
 
-A local enterprise knowledge-base prototype with governed document onboarding, folder-entitled retrieval, citations, PII filtering, and six real MCP tools. All bundled policy and employee examples are **synthetic**. This is not a production banking system.
+A local enterprise knowledge-base prototype with governed document onboarding, folder-entitled retrieval, citations, evidence grounding, and five real MCP tools. All bundled policy and employee examples are **synthetic**. This is not a production banking system.
 
 ## Quick start
 
@@ -72,7 +72,7 @@ SQLite needs no separate server. OpenSearch Dashboards is optional and is not re
 | Default local profile (`APP_MODE=demo`) | OpenSearch BM25; SQLite controls/lineage; configured local/S3 objects (this host now uses local Garage S3) | Extractive responses; no external model calls or embeddings |
 | `APP_MODE=infrastructure` | SQLite or PostgreSQL controls/manifests, approved S3-compatible files, OpenSearch | Governed opt-in OpenRouter generation/embeddings; hybrid startup requires verified corpus readiness |
 
-Infrastructure mode refuses incompatible backends rather than silently falling back. It requires OpenSearch and S3; staff/access/structured controls may remain SQLite or use PostgreSQL. External processing requires inference-assisted PII/grounding guardrails; local rules/NER run first but do not prove anonymity before an external detector sees text. See [design](design-and-evaluation.md), [current rollout](docs/governance-and-activation.md) and `.env.example`.
+Infrastructure mode refuses incompatible backends rather than silently falling back. It requires OpenSearch and S3; staff/access/structured controls may remain SQLite or use PostgreSQL. External processing uses approved transfer scopes and evidence-grounding checks. Text is passed through without PII detection or redaction. See [design](design-and-evaluation.md), [current rollout](docs/governance-and-activation.md) and `.env.example`.
 
 Use [native infrastructure setup](docs/infrastructure.md) and `scripts/install-native-opensearch.sh` for the native OpenSearch install helper, following its usage and prerequisite messages. The helper installs OpenSearch **natively, not with Docker**, when the operator runs it. The user has since installed OpenSearch and Dashboards 3.9.0; the server is live-verified on port 9200. Its production observability/ingestion/security stack is not implied by that native installation. A standalone Python LocalStack CLI can be installed, but the LocalStack service normally still needs a Docker-compatible runtime. Installing its CLI alone is not a native S3 service. A real S3 endpoint is an alternative. PostgreSQL and these services are separate prerequisites, not started by the five-command demo setup.
 
@@ -152,7 +152,7 @@ Checks app health, OpenSearch endpoints, authenticated PostgreSQL `SELECT 1`, an
 | `finance` | E031–E040 | E031 / E032 / E033 / E034 |
 | `people` | E041–E050 | E041 / E042 / E043 / E044 |
 
-Remaining employees are readers. Each employee initially has only their own root; ordinary reader/maker/checker grants are exact-folder, while owner/delegate privileges inherit to descendants. PII visibility is a separate employee entitlement, not permission to read another business root.
+Remaining employees are readers. Each employee initially has only their own root; ordinary reader/maker/checker grants are exact-folder, while owner/delegate privileges inherit to descendants. Folder grants determine document visibility.
 
 ## Evaluation and demonstration
 
@@ -164,7 +164,7 @@ Remaining employees are readers. Each employee initially has only their own root
 
 ## Boundaries
 
-The prototype has not demonstrated terabyte-scale ingestion, high availability, production authentication, immutable audit storage, complete PII recall, universal file-format support, weekly metadata connectors, or deployment. Regex intent routing is not an autonomous LLM planner. Citation-ID validation does not prove that a claim is semantically supported. Keep the original corpus and all secrets out of published demos unless independently cleared.
+The prototype has not demonstrated terabyte-scale ingestion, high availability, production authentication, immutable audit storage, universal file-format support, weekly metadata connectors, or deployment. Simple questions use direct retrieval; complex questions use bounded LLM planning and separate top-k searches. Citation-ID validation does not prove that a claim is semantically supported. Keep the original corpus and all secrets out of published demos unless independently cleared.
 
 ### PDF reading order and evidence
 

@@ -24,8 +24,7 @@ class ModelPlanningTests(unittest.TestCase):
         from unittest.mock import patch
         from kb.providers import plan_questions
         result = {'choices': [{'message': {'content': json.dumps({'parts': parts})}, 'finish_reason': 'stop'}]}
-        with patch('kb.guardrails.protect_with_inference', side_effect=lambda value: value), \
-                patch('kb.providers.model_request', return_value=result):
+        with patch('kb.providers.model_request', return_value=result):
             return plan_questions('State revenue and headcount for FY22.')
 
     def test_shared_period_is_carried_into_each_search(self):
@@ -46,8 +45,7 @@ class CitationAliasTests(unittest.TestCase):
         from kb.providers import synthesize
         answer = {'claims': [{'text': 'FY22 revenue was 100.', 'citations': [ref]}], 'insufficient': False}
         raw = {'choices': [{'message': {'content': json.dumps(answer)}}]}
-        with patch('kb.guardrails.protect_with_inference', side_effect=lambda value: value), \
-                patch('kb.providers.model_request', return_value=raw):
+        with patch('kb.providers.model_request', return_value=raw):
             return synthesize('What was revenue?', [{'id': 'published:000001', 'text': 'FY22 revenue was 100.'}])
 
     def test_alias_maps_back_to_original_chunk(self):
@@ -57,3 +55,39 @@ class CitationAliasTests(unittest.TestCase):
         from kb.providers import AnswerValidationError
         with self.assertRaises(AnswerValidationError):
             self.generate('S9')
+
+
+class PlanningFastPathTests(unittest.IsolatedAsyncioTestCase):
+    async def test_simple_questions_skip_model_and_preserve_query(self):
+        from unittest.mock import patch
+        from kb.agent import build_question_plan
+        with patch('kb.agent.plan_questions') as planner:
+            for question in ['Covid-19 deaths in Q2 2022 ?', 'What was net profit for wholesale banking in FY 2022?',
+                             'Who runs support?', 'Explain the refund policy']:
+                plan, trace = await build_question_plan(question)
+                self.assertEqual(plan, [(question, question)])
+                self.assertEqual(trace['result']['method'], 'Direct search')
+            planner.assert_not_called()
+
+    async def test_complex_questions_use_model(self):
+        from unittest.mock import patch
+        from kb.agent import build_question_plan
+        questions = ['Covid deaths? What was profit?', 'State revenue and headcount for FY22.',
+                     'Compare FY22 with FY23', 'What was revenue? How did it change?',
+                     '1. Revenue\n2. Headcount', 'Explain revenue; describe costs',
+                     'What is revenue, profit, margin?', 'What were revenue/profit?',
+                     'Explain ' + 'context ' * 40]
+        for question in questions:
+            with self.subTest(question=question), patch('kb.agent.plan_questions', return_value=[(question, question)]) as planner:
+                _, trace = await build_question_plan(question)
+                planner.assert_called_once_with(question)
+                self.assertEqual(trace['result']['method'], 'LLM')
+
+    async def test_planning_failure_uses_local_fallback(self):
+        from unittest.mock import patch
+        from kb.agent import build_question_plan
+        from kb.providers import ModelUnavailable
+        with patch('kb.agent.plan_questions', side_effect=ModelUnavailable('unavailable')):
+            plan, trace = await build_question_plan('Who runs support? When is payroll?')
+            self.assertEqual(len(plan), 2)
+            self.assertEqual(trace['result']['method'], 'Local fallback')

@@ -1,14 +1,9 @@
-"""Inference-assisted PII redaction and evidence checks; model verdicts fail closed."""
+"""Evidence grounding checks; model verdicts fail closed."""
+from kb.timings import timed
 import json
-import re
 
 from kb.config import model_chain, settings
 from kb.providers import AnswerValidationError, ModelUnavailable, model_request, record_diagnostic, run_model_chain
-from kb.security import PII_TECHNICAL_FIELDS, pii
-
-_LABELS = {'PERSON', 'ADDRESS', 'EMAIL', 'PHONE', 'ID', 'ACCOUNT', 'CARD', 'DOB', 'HEALTH', 'SECRET'}
-_REFERENCE = re.compile(r'\[[0-9a-f]{32}:(?:[0-9a-f]{32}:)?\d{6}\]')
-
 
 def _judge(instruction: str, data: dict, max_tokens: int = 4096, validate=None) -> dict:
     cfg = settings()
@@ -54,143 +49,7 @@ def _judge(instruction: str, data: dict, max_tokens: int = 4096, validate=None) 
 
 
 
-def mask_with_inference(text: str) -> str:
-    """Locally mask first, then redact validated literal spans, never model rewrites.
-
-    The additional detector is external inference: local masking is not proof that
-    its input is anonymous. This still requires the global approved egress gate.
-    """
-    cfg = settings()
-    source = pii.mask(text)
-    if not source.strip():
-        return source
-    spans = []
-    protected_spans = [(match.start(), match.end()) for pattern in
-                       (_REFERENCE, re.compile(r'GUARDRAILFIELD[A-Z]+BOUNDARY')) for match in pattern.finditer(source)]
-    step = cfg.guardrail_max_chars - 256
-    for offset in range(0, len(source), step):
-        window = source[offset:offset + cfg.guardrail_max_chars]
-        def validate(verdict, window=window, offset=offset):
-            entities = verdict['entities']
-            if type(verdict['blocked']) is not bool or not isinstance(entities, list) or len(entities) > cfg.guardrail_max_entities:
-                raise ValueError('Malformed PII verdict')
-            fixed = []
-            for entity in entities:
-                if not isinstance(entity, dict):
-                    raise ValueError('Entity is not an object')
-                start, end, literal, label = (entity[key] for key in ('start', 'end', 'text', 'label'))
-                label = label.strip().upper() if isinstance(label, str) else label
-                if label not in _LABELS:
-                    raise ValueError('Unknown entity label')
-                if not isinstance(literal, str) or not literal.strip():
-                    raise ValueError('Entity text is empty or not a string')
-                if type(start) is int and type(end) is int and 0 <= start < end <= len(window) and window[start:end] == literal:
-                    positions = [start]
-                else:
-                    # Models often miscount offsets while quoting the right text. Trust the text, not the offsets:
-                    # every literal occurrence is redacted, and a literal absent from the window is still rejected.
-                    positions = [m.start() for m in re.finditer(re.escape(literal), window)]
-                    if not positions:
-                        raise ValueError('Entity text not present in the window')
-                for position in positions:
-                    if any(offset + position < protected_end and offset + position + len(literal) > protected_start
-                           for protected_start, protected_end in protected_spans):
-                        raise ValueError('Entity overlaps a protected span')
-                    fixed.append({'start': position, 'end': position + len(literal), 'text': literal, 'label': label})
-            verdict['entities'] = fixed
-
-        verdict = _judge(
-            'Identify sensitive personal or secret information still present in text. '
-            'Return {"blocked":boolean,"entities":[{"start":integer,"end":integer,"text":string,"label":string}]}. '
-            'Offsets are zero-based Unicode character offsets, end exclusive, and text must match exactly. '
-            'Allowed labels: PERSON, ADDRESS, EMAIL, PHONE, ID, ACCOUNT, CARD, DOB, HEALTH, SECRET. '
-            'Do not flag existing redaction placeholders, citation IDs, ordinary policy terminology or public organisation names. '
-            'Set blocked=true when unsafe content cannot be reliably identified as literal spans.',
-            {'text': window}, validate=validate)
-        try:
-            entities = verdict['entities']
-            if verdict['blocked']:  # a genuine block is final; it is never shopped to another model
-                raise ValueError('Unsafe PII verdict')
-            for entity in entities:
-                start, end, literal, label = (entity[key] for key in ('start', 'end', 'text', 'label'))
-                if (type(start) is not int or type(end) is not int or not 0 <= start < end <= len(window)
-                        or not isinstance(literal, str) or window[start:end] != literal
-                        or label not in _LABELS
-                        or any(offset + start < protected_end and offset + end > protected_start
-                               for protected_start, protected_end in protected_spans)):
-                    raise ValueError('Invalid redaction span')
-                spans.append((offset + start, offset + end))
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ModelUnavailable('PII inference guardrail could not validate safe redaction; content was withheld.') from exc
-        if offset + len(window) >= len(source):
-            break
-    merged = []
-    for start, end in sorted(spans):
-        if merged and start <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
-        else:
-            merged.append((start, end))
-    for start, end in reversed(merged):
-        source = source[:start] + '[REDACTED]' + source[end:]
-    return source
-
-
-def protect_with_inference(value, unmasked: bool = False):
-    """Protect all released narrative fields, including snippets and MCP traces."""
-    if unmasked:
-        return value
-    fields = list(dict.fromkeys(_narrative_strings(value)))
-    if not fields:
-        return value
-    markers = []
-    for index in range(len(fields) + 1):
-        code, number = '', index
-        while True:
-            code = chr(65 + number % 26) + code
-            number = number // 26 - 1
-            if number < 0:
-                break
-        markers.append('\nGUARDRAILFIELD' + code + 'BOUNDARY\n')
-    if any(marker in text for marker in markers for text in fields):
-        raise ModelUnavailable('PII field boundaries are ambiguous; content was withheld.')
-    bundle = ''.join(marker + text for marker, text in zip(markers, fields)) + markers[-1]
-    protected = mask_with_inference(bundle)
-    cache = {}
-    cursor = 0
-    for index, original in enumerate(fields):
-        if not protected.startswith(markers[index], cursor):
-            raise ModelUnavailable('PII field boundary validation failed.')
-        start = cursor + len(markers[index])
-        end = protected.find(markers[index + 1], start)
-        if end < 0:
-            raise ModelUnavailable('PII field boundary validation failed.')
-        cache[original] = protected[start:end]
-        cursor = end
-
-    def visit(item):
-        if isinstance(item, str):
-            return cache[item]
-        if isinstance(item, list):
-            return [visit(part) for part in item]
-        if isinstance(item, dict):
-            return {key: part if key in PII_TECHNICAL_FIELDS else visit(part) for key, part in item.items()}
-        return item
-
-    return visit(value)
-
-
-def _narrative_strings(value):
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, list):
-        for item in value:
-            yield from _narrative_strings(item)
-    elif isinstance(value, dict):
-        for key, item in value.items():
-            if key not in PII_TECHNICAL_FIELDS:
-                yield from _narrative_strings(item)
-
-
+@timed('grounding_verification')
 def verify_grounded_claims(question: str, claims: list[dict], evidence: list[dict]) -> None:
     """Require a separate inference verdict for every claim's cited evidence."""
     if not claims or len(claims) > 15:
@@ -206,7 +65,7 @@ def verify_grounded_claims(question: str, claims: list[dict], evidence: list[dic
         checks.append({'index': index, 'claim': claim['text'],
                        'evidence': [{key: by_id[ref][key] for key in ('id', 'title', 'section', 'page', 'text') if key in by_id[ref]}
                                     for ref in dict.fromkeys(claim['citations'])]})
-    safe_checks = protect_with_inference({'question': question, 'checks': checks})
+    safe_checks = {'question': question, 'checks': checks}
     verdict = _judge(
         'Check each claim strictly against only its cited evidence, and whether it answers the question. '
         'Return {"verdicts":[{"index":integer,"supported":boolean,"relevant":boolean}]}, one entry per claim. '

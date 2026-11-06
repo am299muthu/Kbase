@@ -6,7 +6,7 @@
 - **File layers now use native local S3:** Garage 2.5.0 ARM64, installed from the explicitly authorized Homebrew bottle. S3/RPC/admin listen only on 127.0.0.1 (3900/3901/3903). Private configuration and credentials are under `var/garage`; `.env` remains mode 0600. The `kb-objects` runtime key has only read/write on `abc-knowledge`, not bucket-owner permissions.
 - Copied and SHA-256 verified **61 objects / 5,025,128 bytes**, covering existing staging/raw/raw-parsed/curated/assets layers. Original files were not deleted. The completed manifest/receipt are `var/garage/migration-20261027.json` and `var/garage/migration-20261027.receipt.jsonl`. SQLite was backed up before additive governance tables were initialized.
 - Created **abc-kb-curated-multimodal-v2**, with BM25 fields, separate 2048-dimensional text/image Lucene HNSW cosine fields, model identities and generation filtering. The explicitly approved existing service role now covers this exact index. Native BM25 and both filtered k-NN query shapes passed against the **empty** target without model calls or document writes.
-- Inference-assisted PII masking and a separate grounding verdict are implemented. Local masking runs before the external PII detector; the detector returns literal spans with checked offsets, never arbitrary replacement text. Final answer/snippets/traces are checked together. Citation schema, supported/relevant claim verdicts and current access checks fail closed. Mocked synthetic positive/negative checks passed; no new real-document inference was performed.
+- Evidence grounding and citation validation are enforced. PII detection/redaction was removed from the active pipeline on 2026-11-06.
 - Scanned/sparse/raster-dominant PDF pages use the configured **VL model**, not a Tesseract prerequisite. Local rendering creates four bounded overlapping regions; their combined coverage can include the whole page and is explicitly listed in checker transfer scope. Model-read content remains generated/unverified, with page/bbox/hash lineage. Without VL enabled, ingestion refuses unreadable placeholders. Offline actual scanned-PDF parsing and mocked VL enrichment passed; electronic text/grid parsing still passed.
 
 ## Maker–checker enforcement
@@ -63,7 +63,7 @@ No real PDF enrichment/reprocessing or live hybrid corpus is claimed by this upd
 
 ## Remaining security/operational limits
 
-External PII inference is itself a data transfer. Local rules/NER cannot guarantee its input is anonymous; raw image pixels are not redacted by text masking. Model judgements are fallible and do not prove privacy or factual entailment. Evaluate recall, visual-reading accuracy and grounding before banking deployment.
+External model transfers require approved scope. Grounding verdicts are fallible and need evaluation.
 
 Garage accepted conditional PUTs without enforcing `If-None-Match` in the actual probe. This host therefore explicitly uses **serialized-local** writes: a shared project-DATA_DIR lock and existence check coordinate application/migration writers, with streamed hash verification. This is not server-atomic, a distributed lock, protection against another credential holder, or a production immutability guarantee. Keep other writers stopped for migration. The service is loopback HTTP for approved local development, not a remotely deployable TLS/HA/WORM service. See [storage details](object-storage.md).
 

@@ -1,3 +1,4 @@
+from kb.timings import measure
 from kb.telemetry import traced, operation, event, failure
 import hashlib
 import math
@@ -202,7 +203,8 @@ def search_documents(db, employee_id: str, query: str, top_k: int = 5) -> list[d
         lexical_indexes = ','.join(filter(None, [cfg.opensearch_index, cfg.opensearch_bm25_fallback_index]))
         queries = [(lexical_indexes, lexical)]
         if cfg.opensearch_vector_search:
-            _validate_vectors(client().indices.get_mapping(index=cfg.opensearch_index)[cfg.opensearch_index]['mappings'])
+            with measure('opensearch_mapping'):
+                _validate_vectors(client().indices.get_mapping(index=cfg.opensearch_index)[cfg.opensearch_index]['mappings'])
             vector = embeddings([query])[0]
             text_filters = filters + [{'term': {'embedding_model': _text_model()}}]
             queries.append((cfg.opensearch_index, {'size': top_k * 4, '_source': {'excludes': ['vector', 'image_vector']}, 'query': {'knn': {'vector': {
@@ -216,7 +218,9 @@ def search_documents(db, employee_id: str, query: str, top_k: int = 5) -> list[d
         for index, body in queries:
             mode = 'knn' if 'knn' in body['query'] else 'bm25'
             with operation('opensearch.' + mode, retrieval_mode=mode):
-                hits = client().search(index=index, body=body)['hits']['hits']
+                with measure('opensearch_' + mode):
+                    search_result = client().search(index=index, body=body)
+                hits = search_result['hits']['hits']
                 event('retrieval.results', retrieval_mode=mode, result_count=len(hits))
             for rank, hit in enumerate(hits, 1):
                 chunk_id = hit['_id']

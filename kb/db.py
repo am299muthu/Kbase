@@ -22,6 +22,7 @@ class Employee(Base):
     name: Mapped[str] = mapped_column(String(160))
     business_unit: Mapped[str] = mapped_column(String(100))
     password_hash: Mapped[str] = mapped_column(Text)
+    # Legacy database column retained for existing SQLite schemas; unused by application policy.
     pii_unmasked: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 

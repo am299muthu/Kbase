@@ -15,13 +15,13 @@ As E003 ask: **What must happen before account activation?**
 
 Expected operational sequence:
 
-1. `lookupemployeeaccesscontrol {}` returns E003's retail-root grant and PII flag.
+1. `lookupemployeeaccesscontrol {}` returns E003's retail-root grant.
 2. `listbusinessfolders {}` returns retail business metadata only.
 3. `searchdocuments {"query":"What must happen before account activation?","top_k":5}` returns retail evidence.
 4. One or more `getdocsection {"chunk_id":"<returned ID>"}` calls recheck actual source sections.
-5. `checkpiicompliance {"text":"<draft answer>"}` filters outgoing text.
+5. Verify each generated claim against its cited source.
 
-Show the identity-verification-before-activation evidence and matching citation/snippet. If local mode shows longer source excerpts, say so explicitly; do not imply fluent LLM synthesis occurred. Inspect answer/snippets/trace for masking of the synthetic contact. Discuss that masking is approximate, not certified.
+Inspect citations and source passages for accuracy.
 
 ## Task 2 — Distinct-document, cross-format answer (Q025, about 2 minutes)
 
@@ -35,7 +35,7 @@ Retrieval does not enforce format/source diversity. If either source is missing,
 
 Ask: **What are my permissions and which folders can I access?**
 
-Show `lookupemployeeaccesscontrol → listbusinessfolders → checkpiicompliance`. Explain that current structured grant records, not just policy text, determine the answer. E003 initially sees only `retail-banking`; PII visibility is a separate actual seeded flag. The agent does not accept an employee ID argument to impersonate someone else.
+Show `lookupemployeeaccesscontrol → listbusinessfolders`. Explain that current structured grant records, not just policy text, determine the answer. E003 initially sees only `retail-banking`. The agent does not accept an employee ID argument to impersonate someone else.
 
 ## Task 4 — Audited access-review request (Q031, about 1 minute)
 

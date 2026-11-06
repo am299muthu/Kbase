@@ -37,10 +37,10 @@ def seed():
             for position in range(10):
                 employee_id = f'E{group * 10 + position + 1:03d}'
                 role = ['owner', 'checker', 'maker', 'delegate'][position] if position < 4 else 'reader'
-                record = {'id': employee_id, 'name': f'{GIVEN[position]} Demo{group + 1}', 'business_unit': business, 'pii_unmasked': position == 0, 'synthetic': True}
+                record = {'id': employee_id, 'name': f'{GIVEN[position]} Demo{group + 1}', 'business_unit': business, 'synthetic': True}
                 records.append(record)
                 if not db.get(Employee, employee_id):
-                    db.add(Employee(id=employee_id, name=record['name'], business_unit=business, password_hash=password_hash(cfg.demo_password), pii_unmasked=record['pii_unmasked']))
+                    db.add(Employee(id=employee_id, name=record['name'], business_unit=business, password_hash=password_hash(cfg.demo_password)))
                 controls.append({'folder_id': folder_id, 'employee_id': employee_id, 'role': role})
             db.flush()
             if not db.get(Folder, folder_id):

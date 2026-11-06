@@ -1,3 +1,5 @@
+> Scope update, 2026-11-06: PII detection/redaction and PII visibility gates have been removed from the active pipeline. References to those checks below describe historical runs. Folder authorization and evidence grounding remain active.
+
 # Governed file ingestion and enrichment
 
 Run from the project root with `.venv`. SQLite holds staff/access/structured controls; the current file backend is native local S3 and search is OpenSearch. See [latest rollout, restart and permission boundaries](governance-and-activation.md).

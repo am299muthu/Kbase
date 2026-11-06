@@ -17,7 +17,7 @@ Finally, for poc demonstratation, video showing the deployed application carryin
 - Demonstrate excellent AI engineering skills through the design, implementation, and evaluation of an agentic AI system.  
 - Demonstrate the ability to select appropriate AI system design patterns and architectures, including RAG, tool use, agent orchestration, establishment of Apache OpenSearch indexing of raw data and curated data, and MCP-based integration.  
 - Implement a working LLM-based agentic system that combines policy RAG with agentic workflows over structured mock data.  
-- Build and call MCP servers that expose tools used by the AI agent to complete realistic staff tasks.  Employee may ask any question, and Agentic AI to process the retrieved information from Apache Open Search through RAG with prioper answer. Establish guradrail inplace, so unwanted / harsh/ scarstic questions are handled properly and agentic ai should not reveal PII information.
+- Build and call MCP servers that expose tools used by the AI agent to complete realistic staff tasks.  Employee may ask any question, and Agentic AI to process the retrieved information from Apache Open Search through RAG with prioper answer. Establish guradrail inplace, so unwanted / harsh/ scarstic questions are handled properly with citations and independent grounding checks.
 - Evaluate both answer quality and agent behavior, including groundedness, citation accuracy, tool selection, workflow completion, and latency.  
 - Utilize AI tooling as appropriate and document the impact of that tooling on the development process.
 
@@ -64,7 +64,7 @@ For embedding models, local embedding models can be used .
 
 - Implement one or more MCP servers that expose tools for the agent. The MCP server may run as a local process using stdio, a localhost HTTP service, a Streamable HTTP service, or another MCP-compatible approach supported by your system's architecture.  
 - Expose at least five MCP tools. At least one tool must use the RAG index or retrieve policy evidence, and at least one tool must use mock structured data or perform a mock operation.  
-- Tools should include tools such as the following: searchdocuments, getdocsection, lookupemployeeaccesscontrol, and checkpiicompliance (else masked for user for piidata).  
+- Tools should include tools such as the following: searchdocuments, getdocsection, lookupemployeeaccesscontrol and listbusinessfolders.  
 - The agent must actually call MCP-exposed tools during execution; hard-coded direct function calls are not sufficient unless they are wrapped and invoked through the MCP layer.  
 - Document the MCP architecture, transport choice, tool schemas, and how the agent client discovers and calls tools.
 

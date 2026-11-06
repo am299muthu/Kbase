@@ -1,0 +1,76 @@
+{
+  "percentiles": "p50 median; p95 nearest rank. Includes failed requests. Missing stages are excluded.",
+  "aggregation": "Stage totals sum calls per request, including retries. Concurrent and nested stages overlap.",
+  "cases": {
+    "simple": "Covid-19 deaths in Q2 2022 ?",
+    "multi": "Covid-19 deaths in Q2 2022 ?\nwhat was net profit for wholesale banking in the FY 2022 ?"
+  },
+  "groups": {
+    "simple": {
+      "requests": 1,
+      "successes": 1,
+      "metrics_ms": {
+        "end_to_end": {
+          "n": 1,
+          "p50": 104170.497,
+          "p95": 104170.497
+        },
+        "pii_verification": {
+          "n": 1,
+          "p50": 40583.434,
+          "p95": 40583.434
+        },
+        "generation_api": {
+          "n": 1,
+          "p50": 47660.805,
+          "p95": 47660.805
+        },
+        "grounding_verification": {
+          "n": 1,
+          "p50": 16732.685,
+          "p95": 16732.685
+        },
+        "chat_total": {
+          "n": 1,
+          "p50": 104159.717,
+          "p95": 104159.717
+        },
+        "planning": {
+          "n": 1,
+          "p50": 1.0,
+          "p95": 1.0
+        },
+        "opensearch_mapping": {
+          "n": 1,
+          "p50": 77.64,
+          "p95": 77.64
+        },
+        "embedding_api": {
+          "n": 1,
+          "p50": 2344.284,
+          "p95": 2344.284
+        },
+        "opensearch_bm25": {
+          "n": 1,
+          "p50": 90.941,
+          "p95": 90.941
+        },
+        "opensearch_knn": {
+          "n": 1,
+          "p50": 196.524,
+          "p95": 196.524
+        },
+        "retrieval_total": {
+          "n": 1,
+          "p50": 10968.472,
+          "p95": 10968.472
+        }
+      }
+    },
+    "multi": {
+      "requests": 0,
+      "successes": 0,
+      "metrics_ms": {}
+    }
+  }
+}
