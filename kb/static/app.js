@@ -234,6 +234,7 @@
     state.chatGeneration++;
     state.chatBusy = false;
     state.user = null;
+    $('pdfdebug-back').hidden = true;
     $('pdfdebug-content').replaceChildren();
     delete $('pdfdebug-content').dataset.loaded;
     state.folders = [];
@@ -324,10 +325,14 @@
     state.view = next;
     for (const [key, title] of Object.entries(viewNames)) {
       $(`view-${key}`).hidden = key !== next;
-      const item = document.querySelector(`[data-view="${key}"]`);
-      item.classList.toggle('active', key === next);
-      if (key === next) item.setAttribute('aria-current', 'page'); else item.removeAttribute('aria-current');
       if (key === next) $('breadcrumb-current').textContent = title;
+    }
+    const section = next === 'pdfdebug' ? 'ingestion' : next;
+    for (const item of $('primary-nav').querySelectorAll('[data-view]')) {
+      const active = item.dataset.view === section;
+      item.classList.toggle('active', active);
+      if (active) item.setAttribute('aria-current', next === section ? 'page' : 'location');
+      else item.removeAttribute('aria-current');
     }
     document.title = `${viewNames[next]} | Knowledge`;
     closeNavigation();
@@ -1011,7 +1016,7 @@
     scroll.tabIndex = 0;
     const table = el('table');
     const head = el('thead'); const tr = el('tr');
-    for (const label of ['Document', 'Stage', 'Request', 'Submitted', 'Actions']) { const th = el('th', '', label); th.scope = 'col'; tr.append(th); }
+    for (const label of ['Document', 'Stage', 'Request', 'Submitted', 'PDF inspector', 'Actions']) { const th = el('th', '', label); th.scope = 'col'; tr.append(th); }
     head.append(tr);
     const body = el('tbody');
     for (const item of items) {
@@ -1039,7 +1044,14 @@
         actions.append(retry);
       }
       actionsCell.append(actions);
-      row.append(nameCell, stageCell, reqCell, dateCell, actionsCell);
+      const inspectorCell = el('td', '', '—');
+      if (item.request_id && /\.pdf$/i.test(item.title)) {
+        const inspect = button('PDF inspector', 'mini-button');
+        inspect.setAttribute('aria-label', `PDF inspector for ${item.title}, version ${item.version}`);
+        inspect.addEventListener('click', () => openPdfInspector(item).catch(alertError));
+        inspectorCell.replaceChildren(inspect);
+      }
+      row.append(nameCell, stageCell, reqCell, dateCell, inspectorCell, actionsCell);
       body.append(row);
     }
     table.append(head, body); scroll.append(table);
@@ -1125,16 +1137,20 @@
   }
   async function openPdfInspector(item) {
     const host = $('pdfdebug-content');
-    host.dataset.loaded='1';
-    const epoch=state.epoch;
-    const back=button('Choose another PDF', 'button secondary');
-    back.addEventListener('click',()=>{delete host.dataset.loaded;loadPdfChoices().catch(alertError);});
-    host.replaceChildren(back,el('p', '', 'Loading PDF geometry…'));
+    host.dataset.loaded = item.request_id;
+    location.hash = 'pdfdebug';
+    $('pdfdebug-back').hidden = false;
+    const epoch = state.epoch;
+    const isCurrent = () => epoch === state.epoch && host.dataset.loaded === item.request_id;
+    host.replaceChildren(el('p', '', 'Loading PDF geometry…'));
     let data;
     try { data = await api(`/api/processing-requests/${encodeURIComponent(item.request_id)}/pdf-layout`); }
-    catch(error) { if(epoch===state.epoch) host.replaceChildren(back,el('p','inline-error',error.message)); return; }
-    if(epoch!==state.epoch) return;
-    host.replaceChildren(back,el('h2', '', item.title));
+    catch (error) {
+      if (isCurrent()) host.replaceChildren(el('p', 'inline-error', error.message));
+      return;
+    }
+    if (!isCurrent()) return;
+    host.replaceChildren(el('h2', '', item.title));
     if (data.coverage) host.append(el('p', 'muted', data.coverage));
     const pages = [...new Set(data.objects.map(o => o.page))].sort((a,b) => a-b);
     if (!pages.length) { host.append(el('p', '', 'No boxes were recorded for this run.')); return; }
@@ -1225,7 +1241,7 @@
     if (item.request_id && /\.pdf$/i.test(item.title)) {
       const inspect = button('Open PDF inspector', 'button primary');
       inspect.addEventListener('click', () => {
-        $('form-dialog').close(); location.hash = 'pdfdebug';
+        $('form-dialog').close();
         openPdfInspector(item).catch(alertError);
       });
       body.append(inspect);
@@ -1536,6 +1552,13 @@
   $('ingestion-filter').addEventListener('change', renderIngestion);
   $('ingestion-search').addEventListener('input', renderIngestion);
   $('upload-button').addEventListener('click', openUpload);
+  $('pdfdebug-back').addEventListener('click', () => {
+    const host = $('pdfdebug-content');
+    delete host.dataset.loaded;
+    $('pdfdebug-back').hidden = true;
+    host.replaceChildren();
+    location.hash = 'ingestion';
+  });
   $('create-folder-button').addEventListener('click', createFolder);
   $('refresh-access').addEventListener('click', () => busy($('refresh-access'), refreshFolders).catch(alertError));
   $('refresh-audit').addEventListener('click', () => busy($('refresh-audit'), refreshAudit).catch(alertError));

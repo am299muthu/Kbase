@@ -50,6 +50,16 @@ class ModelHTTPError(ModelUnavailable):
         super().__init__(f'Model gateway returned HTTP {status_code}; check model availability and free-tier quotas.')
 
 
+class ModelQuotaError(ModelHTTPError):
+    def __init__(self, model):
+        super().__init__(429)
+        self.args = (f'Token quota exhausted for {model}. Retry after the provider restores quota.',)
+
+
+class InvalidVisionOutput(ModelUnavailable):
+    """A completed model request produced unusable structured output."""
+
+
 def _price_ceiling(model: str, resource: str) -> dict:
     """Free models keep the zero-price ceiling; a named paid model needs explicit ceilings."""
     cfg = settings()
@@ -129,6 +139,10 @@ def model_request(path: str, payload: dict, retries: int) -> dict:
                 except APIStatusError as exc:
                     response = exc.response
                 event('model.response', model=payload.get('model'), attempt=attempt + 1, http_status=response.status_code, error=response.is_error)
+                if response.status_code == 429 and 'exceeded your tokens quota' in response.text.lower():
+                    report_progress(http_status=429)
+                    record_diagnostic('token_quota_exhausted', payload['model'], 429, response.text)
+                    raise ModelQuotaError(payload['model'])
                 if response.status_code in {429, 502, 503, 504} and attempt < retries:
                     if attempt == retries - 1:
                         record_diagnostic('http_error_retrying', payload.get('model'), response.status_code, response.text)
@@ -276,8 +290,19 @@ def describe_visual(data: bytes, object_kind: str) -> dict:
             ]},
         ],
     }
-    def attempt(model):
-        result = model_request(cfg.openrouter_chat_path, {**payload, 'model': model}, cfg.i_retry)
+    def attempt(model, correction=None):
+        body = {**payload, 'model': model}
+        if correction:
+            instruction = (
+                f'The previous response failed validation: {correction}. Read the original crop again. '
+                'Return a complete JSON object. For tables, write each visible row as one string '
+                'in visible_text, preserving column order, signs, decimals and units. '
+                'Return an array of strings for uncertainties. Do not infer missing cells.'
+            )
+            body['messages'] = [*payload['messages'][:-1], {'role': 'user', 'content': [
+                *payload['messages'][-1]['content'], {'type': 'text', 'text': instruction}]}]
+            body['temperature'] = 0
+        result = model_request(cfg.openrouter_chat_path, body, cfg.i_retry)
         try:
             choice = result['choices'][0]
             if choice.get('finish_reason') not in (None, 'stop'):
@@ -312,8 +337,16 @@ def describe_visual(data: bytes, object_kind: str) -> dict:
                 summary['keys'] = 'content was not parseable JSON'
             record_diagnostic('invalid_model_output_reason', model, 200, summary)
             record_diagnostic('invalid_model_output', model, 200, result)
-            raise ModelUnavailable('Vision model returned an invalid description; no fabricated fallback was used.') from exc
-    return run_model_chain(vision_models, attempt, what='vision')
+            raise InvalidVisionOutput(summary['reason']) from exc
+
+    try:
+        return run_model_chain(vision_models, attempt, what='vision')
+    except InvalidVisionOutput as exc:
+        # Exhaust normal fallbacks first, then allow one format correction per crop.
+        model = vision_models[-1]
+        record_diagnostic('retrying_visual_format', model, 200, str(exc))
+        return attempt(model, correction=str(exc))
+
 
 
 def plan_questions(message: str) -> list[tuple[str, str]]:

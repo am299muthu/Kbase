@@ -76,6 +76,14 @@ class ProviderSdkTests(unittest.TestCase):
         self.assertEqual(len(self.requests),1)
         self.assertNotIn('test-key',self.diagnostics[-1]['response'])
 
+    def test_exhausted_token_quota_does_not_burn_retries(self):
+        from kb.providers import ModelQuotaError
+        self.responses = [httpx.Response(429, json={'error': {'message': 'You exceeded your tokens quota'}})]
+        with self.assertRaises(ModelQuotaError):
+            self.call(retries=3)
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(self.diagnostics[-1]['kind'], 'token_quota_exhausted')
+
     def test_network_failure_is_wrapped(self):
         self.responses=[httpx.ConnectError('unreachable')]
         with self.assertRaises(ModelUnavailable):self.call()
@@ -94,3 +102,22 @@ class ProviderSdkTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class VisionRepairTests(unittest.TestCase):
+    def test_corrects_last_invalid_result_and_preserves_source(self):
+        from kb.providers import describe_visual
+        cfg = SimpleNamespace(pdf_vision_enabled=True, openrouter_vision_model='one', openrouter_vision_fallback_model='two',
+                              llm_temperature=0, openrouter_chat_path='/chat', i_retry=0)
+        def result(content):
+            return {'choices': [{'finish_reason':'stop', 'message':{'content':json.dumps(content)}}]}
+        invalid = result({'description':'table','visible_text':{'cell':'100'}})
+        valid = result({'description':'table','visible_text':['FY25 | 100'],'uncertainties':[]})
+        with patch('kb.providers.settings',return_value=cfg), patch('kb.providers.record_diagnostic'), \
+             patch('kb.providers._image_data_url',return_value='synthetic-image'), \
+             patch('kb.providers.model_request',side_effect=[invalid,invalid,valid]) as send:
+            self.assertEqual(describe_visual(b'image','table')['visible_text'], ['FY25 | 100'])
+            bodies = [call.args[1] for call in send.call_args_list]
+            self.assertEqual([b['model'] for b in bodies], ['one','two','two'])
+            self.assertIn('visible_text is not a list', bodies[-1]['messages'][-1]['content'][-1]['text'])
+            self.assertEqual(bodies[-1]['messages'][-1]['content'][1], bodies[0]['messages'][-1]['content'][1])
