@@ -54,6 +54,63 @@ synthetic VL probe passed, but a later full live VL ingestion check was rate-lim
 (HTTP 429). No chart-understanding accuracy or completed corpus reprocessing is
 claimed. See [configuration and verification](pdf-multimodal-pipeline.md).
 
+## Local Docling and Granite (`docling_local`, Windows demo default)
+
+`scripts/windows/env.ps1` sets `PDF_PARSER=docling_local` and `IMAGE_PARSER=docling_local` when
+the local Docling install exists at `App/docling/.venv`. KBase's own Python has no Docling, torch
+or transformers, so `kb.parsers._parse_docling_local` runs `scripts/docling/worker.py` with that
+install's Python (`DOCLING_PYTHON`) as a separate process for each PDF or image.
+
+- **Docling:** reading-order layout, headings and sections, TableFormer tables as Markdown, picture
+  crops, and RapidOCR for scanned pages, bitmap regions and uploaded images (no Tesseract needed).
+- **Picture classifier:** Docling's DocumentFigureClassifier labels each picture. An uploaded image
+  that is itself a chart is classified as a whole.
+- **Merged chart regions:** the layout model often draws one picture around several charts (a row
+  of small panels, two stacked charts). The worker cuts such a region at full-width divider lines,
+  or else at white gutters, classifies each piece, folds nearby label pieces (legends, axis years)
+  into the chart beside them, and keeps the cut only when at least two pieces are charts.
+- **Missed vector charts:** charts drawn as a few vector paths (a donut) can be missed by the layout
+  model. The worker clusters the PDF's own path objects, skips anything already inside a picture or
+  table, and classifies the rest; charts among them become pictures.
+- **Pictures classified as a table** are also read by Granite (a panel of small charts, or a table
+  drawn as an image).
+- **Granite Vision 4.1 4B:** reads bar, line, pie and stacked bar charts into a data table, one
+  chart at a time with a time limit each. It runs on the GPU in 4-bit (about 2.6 GB of graphics
+  memory, 3 to 9 s per chart on the RTX 4060), otherwise on the CPU. Each table is indexed as a
+  `vision_description` block next to its picture, marked `generated` with the model name and the
+  text "a model reading, check it against the chart". Scatter plots and other pictures stay as
+  pictures with their caption. When Granite cannot finish a table in time (a line of daily prices)
+  it writes a short summary instead (`<chart2summary>`, `GRANITE_SUMMARY_SECONDS`, default 60).
+- **Number check:** every Granite table is compared with the numbers printed in the PDF text inside
+  the chart's region: matches (80% or more found), partial, not found, or not checked (no text
+  layer). The result is in the indexed text and the object inspector. It catches invented numbers,
+  not a right number placed in the wrong row or column.
+- Every block keeps its page and top-left bounding box, and every layout object goes to the PDF
+  object inspector.
+- Models load only from the local Hugging Face cache (`HF_HUB_OFFLINE=1`); nothing is downloaded
+  and nothing leaves the machine.
+- Progress shows in the Ingestion monitor during `parsing` (Granite's "chart n of m").
+- A failure names the step and exception type; the worker's log tail goes to the server log only.
+
+The time limits (Granite chart table, Granite chart summary, Docling whole document, Tesseract OCR,
+Word .doc conversion) can be changed in the app on the **Processing settings** page by employees
+listed in `KB_DEVELOPERS`. A saved value wins over the environment variable, which wins over the
+default. Changes apply from the next document that starts processing, are written to the activity
+log, and do not void approvals; each run records the limits it used in its extraction evidence.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `DOCLING_PYTHON` | set by `env.ps1` | python.exe of the local Docling install |
+| `DOCLING_OCR` | `true` | OCR bitmap regions and scanned pages |
+| `GRANITE_CHARTS` | `true` | read charts into tables |
+| `GRANITE_MAX_CHARTS` | `25` | charts read per document; the rest stay pictures, noted in the evidence |
+| `GRANITE_SECONDS_PER_CHART` | `90` | time limit per chart |
+| `DOCLING_TIMEOUT_SECONDS` | `3600` | whole-document limit |
+
+Measured on the synthetic 4-page `sample_report.pdf` through the live maker-checker flow: 93 s
+from approval to indexed, 6 of 7 charts read (the scatter plot is kept as a picture), 22 chunks.
+Each document loads the models again (about 30 s); a long-lived worker would remove that.
+
 ## Chunking and provenance
 
 Consecutive blocks with the same section and visual-object identity are grouped. Headings start new

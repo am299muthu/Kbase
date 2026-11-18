@@ -6,11 +6,14 @@ Optional dependencies are imported only by the parser that needs them. See
 from __future__ import annotations
 
 from kb.telemetry import traced
+from kb.processing_limits import current_limits, processing_limit
 
 import csv
 import hashlib
 import importlib
 import io
+import json
+import logging
 import mimetypes
 import os
 from pathlib import Path
@@ -18,6 +21,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import warnings
 import zipfile
 from dataclasses import dataclass, field
@@ -199,7 +203,7 @@ def _ocr(image: Any) -> str:
     try:
         return pytesseract.image_to_string(
             image, lang=os.environ.get("OCR_LANGUAGE", "eng"),
-            timeout=_limit("OCR_TIMEOUT_SECONDS", 60),
+            timeout=processing_limit("OCR_TIMEOUT_SECONDS"),
         ).strip()
     except Exception as exc:
         raise ParseError(f"Local OCR failed ({type(exc).__name__}); check Tesseract and installed language data") from exc
@@ -342,6 +346,168 @@ def _parse_docling(path: Path, builder: _Builder) -> None:
                             section, item_page, "image", asset)
 
 
+_DOCLING_WORKER = Path(__file__).resolve().parent.parent / "scripts" / "docling" / "worker.py"
+_GRANITE_MODEL = "granite-vision-4.1-4b"
+# How a Granite chart table is introduced in the index, by the worker's check of its numbers
+# against the PDF text inside the chart. The check finds invented numbers, not misplaced ones.
+_CHART_MARKERS = {
+    "matches": "[Chart data read by Granite Vision; its numbers match the PDF text, check it against the chart]",
+    "partial": "[Chart data read by Granite Vision; only some of its numbers are in the PDF text, check it against the chart]",
+    "not-found": "[Chart data read by Granite Vision; its numbers are not in the PDF text, check it against the chart before using it]",
+    "totals": "[Chart data read by Granite Vision; its totals do not add up, check the cells against the chart before using it]",
+    None: "[Chart data read by Granite Vision; a model reading, check it against the chart]",
+}
+
+
+def _docling_box(box: dict, page: dict) -> dict | None:
+    width, height = float(page.get("width") or 0), float(page.get("height") or 0)
+    left, top, right, bottom = (float(box[k]) for k in ("l", "t", "r", "b"))
+    left, top = max(0.0, left), max(0.0, top)
+    right, bottom = min(width, right), min(height, bottom)
+    if width <= 0 or height <= 0 or right <= left or bottom <= top:
+        return None
+    return {"left": left, "top": top, "right": right, "bottom": bottom,
+            "page_width": width, "page_height": height, "origin": "top-left"}
+
+
+def _chart_markdown(rows: list[list[str]]) -> str:
+    def cell(value: Any) -> str:
+        return str(value).replace("|", "/").replace("\n", " ").strip()
+    header, *body = rows
+    lines = ["| " + " | ".join(cell(v) for v in header) + " |", "|" + "---|" * len(header)]
+    lines += ["| " + " | ".join(cell(v) for v in row) + " |" for row in body]
+    return "\n".join(lines)
+
+
+def _run_docling_worker(path: Path, out: Path) -> dict:
+    """Run scripts/docling/worker.py with the local Docling Python and return its result.json."""
+    configured = os.environ.get("DOCLING_PYTHON", "").strip()
+    python = Path(configured).expanduser() if configured else None
+    if python is None or not python.is_file():
+        raise MissingDependency("docling_local parsing needs DOCLING_PYTHON, the python.exe of the local Docling install")
+    if not _DOCLING_WORKER.is_file():
+        raise MissingDependency("The Docling worker script scripts/docling/worker.py is missing")
+    from kb.progress import report_progress
+
+    from kb.config import worker_python_flags
+    command = [str(python), *worker_python_flags(), str(_DOCLING_WORKER), "--input", str(path), "--out", str(out),
+               "--ocr", "on" if _enabled("DOCLING_OCR", True) else "off",
+               "--granite", "on" if _enabled("GRANITE_CHARTS", True) else "off",
+               "--granite-max", str(_limit("GRANITE_MAX_CHARTS", 25, allow_zero=True)),
+               "--granite-seconds", str(processing_limit("GRANITE_SECONDS_PER_CHART")),
+               "--summary-seconds", str(processing_limit("GRANITE_SUMMARY_SECONDS"))]
+    env = {**os.environ, "TORCHDYNAMO_DISABLE": "1", "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+           "PYTHONIOENCODING": "utf-8"}
+    timeout = processing_limit("DOCLING_TIMEOUT_SECONDS")
+    log_path = out / "worker.log"
+    timed_out = threading.Event()
+    with log_path.open("wb") as log:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=log, env=env,
+                                   text=True, encoding="utf-8", errors="replace")
+
+        def kill() -> None:
+            timed_out.set()
+            process.kill()
+
+        timer = threading.Timer(timeout, kill)
+        timer.start()
+        try:
+            for line in process.stdout:  # one JSON progress line per worker step
+                try:
+                    step = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(step, dict):
+                    report_progress("parsing", **{k: step[k] for k in ("completed", "total", "model") if k in step})
+            code = process.wait()
+        finally:
+            timer.cancel()
+            if process.poll() is None:
+                process.kill()
+    if timed_out.is_set():
+        raise ParserLimitError(f"Docling did not finish within its time limit ({timeout} s); a developer can raise it on the Processing settings page")
+    if code != 0:
+        try:
+            error = json.loads((out / "error.json").read_text(encoding="utf-8"))
+            detail = f"while {error.get('step', 'parsing')} ({error.get('error_type', 'error')})"
+        except (OSError, ValueError):
+            detail = f"(worker exit code {code})"
+        tail = log_path.read_bytes()[-4000:].decode("utf-8", "replace")
+        logging.getLogger(__name__).error("Docling worker failed %s; log tail:\n%s", detail, tail)
+        raise ParseError(f"Docling failed {detail}; the server log has the details")
+    return json.loads((out / "result.json").read_text(encoding="utf-8"))
+
+
+def _parse_docling_local(path: Path, builder: _Builder) -> None:
+    """Docling layout, tables and OCR plus Granite chart tables, run in the local Docling install.
+
+    Docling and Granite need Python 3.14, torch and transformers, which KBase's own environment does
+    not carry, so they run as a separate process (scripts/docling/worker.py). A chart Granite reads
+    becomes a generated block next to its picture, marked as a model reading.
+    """
+    out = Path(tempfile.mkdtemp(prefix="docling-", dir=builder.asset_dir.parent))
+    try:
+        result = _run_docling_worker(path, out)
+        pages = result.get("pages") or {}
+        builder.layout_objects = []
+        builder.extraction_evidence = {
+            "docling": {"device": result.get("device"), "ocr": result.get("ocr"),
+                        "timings": result.get("timings"), "granite": result.get("granite"),
+                        "notes": result.get("notes") or []}}
+        heading_labels = {"section_header", "title"}
+        for item_index, item in enumerate(result.get("items") or []):
+            label = item.get("label") or "text"
+            ref = item.get("ref") or f"item{item_index}"
+            section = item.get("section") or "Content"
+            picture = item.get("picture")
+            seen_pages: set = set()
+            for box_index, box in enumerate(item.get("boxes") or [{"page": None}]):
+                page_no = box.get("page")
+                bbox = _docling_box(box, pages.get(str(page_no), {})) if page_no else None
+                if bbox:
+                    builder.layout_objects.append({
+                        "object_id": f"layout:{ref}:{page_no}:{box_index}", "object_kind": label,
+                        "page": page_no, "extractor": "docling-layout", "bbox": bbox})
+                if page_no in seen_pages:
+                    continue  # one block per page; further boxes on that page are layout only
+                seen_pages.add(page_no)
+                metadata = {"object_id": f"docling:{ref}:{page_no}", "object_kind": label,
+                            "extractor": "docling", "generated": False}
+                if bbox:
+                    metadata["bbox"] = bbox
+                if picture is None:
+                    kind = "heading" if label in heading_labels else "table" if label == "table" else "text"
+                    builder.add(item.get("text"), section, page_no, kind, metadata=metadata)
+                    continue
+                kind_name = (picture.get("class") or "picture").replace("_", " ")
+                asset = None
+                if picture.get("file"):
+                    asset = builder.asset((out / picture["file"]).read_bytes(), ".png", section, page_no,
+                                          object_id=metadata["object_id"], object_kind=picture.get("class") or "picture",
+                                          extractor="docling", extraction="Docling picture crop",
+                                          **({"bbox": bbox} if bbox else {}))
+                caption = (picture.get("caption") or "").strip()
+                split = f", holding {picture['split_into']} charts read separately" if picture.get("split_into") else ""
+                builder.add(f"[Picture: {kind_name}{split}]" + (f" {caption}" if caption else ""),
+                            section, page_no, "image", asset, metadata=metadata)
+                chart = picture.get("chart") or {}
+                reading = {**metadata, "generated": True, "model": _GRANITE_MODEL, "model_seconds": chart.get("seconds")}
+                if chart.get("rows"):
+                    check = chart.get("check") or {}
+                    reading.update(reading_mode="table", check=check or None)
+                    marker = (_CHART_MARKERS["totals"] if check.get("totals_off")
+                              else _CHART_MARKERS.get(check.get("status"), _CHART_MARKERS[None]))
+                    builder.add(marker + "\n"
+                                + _chart_markdown(chart["rows"]), section, page_no, "vision_description", asset,
+                                metadata=reading)
+                elif chart.get("summary"):
+                    reading.update(reading_mode="summary", note=chart.get("note"))
+                    builder.add("[Chart summary written by Granite Vision; a model reading, check it against the chart]\n"
+                                + chart["summary"], section, page_no, "vision_description", asset, metadata=reading)
+    finally:
+        shutil.rmtree(out, ignore_errors=True)
+
+
 def _parse_docx(path: Path, builder: _Builder) -> None:
     _archive_guard(path)
     docx = _dependency("docx", "python-docx")
@@ -431,7 +597,7 @@ def _parse_doc(path: Path, builder: _Builder) -> None:
         try:
             result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, cwd=work, check=False, shell=False,
-                                    timeout=_limit("DOC_CONVERSION_TIMEOUT_SECONDS", 120))
+                                    timeout=processing_limit("DOC_CONVERSION_TIMEOUT_SECONDS"))
         except subprocess.TimeoutExpired as exc:
             raise ParseError("Legacy Word conversion timed out; inspect the document in an isolated converter") from exc
         if result.returncode or not output.is_file():
@@ -709,15 +875,23 @@ def parse_document(path: Path, asset_dir: Path) -> ParsedDocument:
         ".parquet": ("pyarrow-metadata", _parse_parquet),
     }
     if suffix == ".pdf":
-        if selected_pdf not in {"pypdf", "docling", "docling_hybrid"}:
-            raise ParseError("PDF_PARSER must be pypdf, docling or docling_hybrid; no implicit fallback")
-        if selected_pdf == "docling_hybrid":
+        if selected_pdf not in {"pypdf", "docling", "docling_hybrid", "docling_local"}:
+            raise ParseError("PDF_PARSER must be pypdf, docling, docling_hybrid or docling_local; no implicit fallback")
+        if selected_pdf == "docling_local":
+            parser, function = "docling-local", _parse_docling_local
+        elif selected_pdf == "docling_hybrid":
             from kb.pdf_hybrid import parse_hybrid_pdf
             parser, function = "docling+pypdf+pdfplumber", parse_hybrid_pdf
         else:
             parser, function = selected_pdf, _parse_docling if selected_pdf == "docling" else _parse_pdf
     elif suffix in {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}:
-        parser, function = "pytesseract", _parse_image
+        selected_image = os.environ.get("IMAGE_PARSER", "pytesseract").lower()
+        if selected_image not in {"pytesseract", "docling_local"}:
+            raise ParseError("IMAGE_PARSER must be pytesseract or docling_local; no implicit fallback")
+        if selected_image == "docling_local":
+            parser, function = "docling-local", _parse_docling_local
+        else:
+            parser, function = "pytesseract", _parse_image
     elif suffix in {".csv", ".txt", ".log", ".md", ".markdown", ".tsv"}:
         parser, function = "csv" if suffix == ".csv" else "text", _parse_text
     elif suffix in functions:
@@ -727,6 +901,8 @@ def parse_document(path: Path, asset_dir: Path) -> ParsedDocument:
     try:
         builder = _Builder(Path(asset_dir), parser)
         function(path, builder)
+        # Record the time limits this run used (see kb.processing_limits).
+        builder.extraction_evidence = {**getattr(builder, "extraction_evidence", {}), "time_limits": current_limits()}
         return builder.finish()
     except ParseError:
         raise

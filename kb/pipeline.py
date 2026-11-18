@@ -1,5 +1,10 @@
 from kb.telemetry import traced, operation, event, failure
+import os
+import signal
+import subprocess
+import sys
 import tempfile
+import time
 from pathlib import Path
 
 from sqlalchemy import delete, select
@@ -8,8 +13,10 @@ from kb.config import settings
 from kb.db import Chunk, Document, Folder, IndexedGeneration, ProcessingRequest, ProcessingProgress, ReplacementCleanup, audit, db_session, now
 from kb.governance import GovernanceError, digest_json, lock_document, processing_scope, validate_approval, require_hybrid_ingestion
 from kb.parsers import MissingDependency, ParseError, ParserLimitError, chunk_document, parse_document
+from kb.processing_limits import load_limits, using_limits
 from kb.processing_context import bound_processing_transfers
-from kb.providers import ModelUnavailable, start_diagnostics
+from kb.providers import InvalidVisionOutput, ModelQuotaError, ModelUnavailable, start_diagnostics
+from kb.processing_timeout import LIMIT, expire_overdue, fail_timeout, latest_claim, remaining_seconds
 from kb.progress import report_progress
 from kb.search import chunk_manifest, index_chunks, retention_cutoff
 from kb.storage import ObjectStore, file_digest
@@ -32,6 +39,11 @@ def _failure_details(exc, stage):
         code, reason = 'parser_failed', 'Local PDF/document extraction failed; operator parser review is required.'
     elif isinstance(exc, ModelUnavailable) and stage == 'visual_enrichment' and not settings().pdf_vision_enabled:
         code, reason = 'vl_approval_required', 'Unverified scan/raster content requires VL review, which is disabled in the approved local profile. Review a separate VL/image-transfer scope; do not bypass the external-transfer gate.'
+    elif isinstance(exc, ModelQuotaError):
+        return 'model_quota_exhausted', f'[model_quota_exhausted; stage={stage}] {exc}'
+    elif isinstance(exc, InvalidVisionOutput):
+        return 'invalid_vision_output', ('[invalid_vision_output; stage=visual_enrichment] The vision model '
+                                         'returned unusable output after a correction attempt. See model diagnostics.')
     elif isinstance(exc, ModelUnavailable):
         code, reason = 'model_unavailable', 'An approved model, transfer gate or validated model response is unavailable.'
     else:
@@ -61,6 +73,7 @@ def process_request(request_id: str) -> bool:
     event('ingestion.started', request_id=request_id)
     document_id = None
     claimed = False
+    started = None
     stage = 'approval'
     diagnostics = start_diagnostics()
     try:
@@ -97,6 +110,7 @@ def process_request(request_id: str) -> bool:
                     'metadata': doc.metadata_json, 'version': doc.version}
             audit(db, 'pipeline', 'ingestion.claimed', document_id,
                   {'request_id': request_id, 'kind': request.kind, 'scope_sha256': request.scope_sha256})
+            started = latest_claim(db, request)
         cfg = settings()
         store = ObjectStore()
         with tempfile.TemporaryDirectory(prefix='parse-', dir=cfg.data_dir) as temp:
@@ -114,7 +128,9 @@ def process_request(request_id: str) -> bool:
             store.put_file(raw_key, source)
             stage = 'parsing'
             report_progress(stage)
-            parsed = parse_document(source, work / 'assets')
+            # Time limits saved on the Processing settings page apply from the next run that starts.
+            with using_limits(load_limits()):
+                parsed = parse_document(source, work / 'assets')
             _check_running(request_id)
             if source.suffix == '.pdf':
                 parsed = order_pdf_blocks(parsed)
@@ -190,12 +206,17 @@ def process_request(request_id: str) -> bool:
                 request = db.get(ProcessingRequest, request_id)
                 if request.status != 'processing':
                     raise GovernanceError('Processing request was interrupted before publication.')
+                if latest_claim(db, request) != started:
+                    return False
+                if remaining_seconds(started) <= 0:
+                    fail_timeout(db, request, document)
+                    return False
                 validate_approval(db, request, document)
                 db.execute(delete(Chunk).where(Chunk.document_id == document_id))
                 if not archived:
                     for payload in payloads:
                         db.add(Chunk(id=payload['id'], document_id=document_id, folder_id=info['folder_id'],
-                                     text=payload['text'] if cfg.search_backend == 'sqlite' else '',
+                                     text=payload['text'] if cfg.search_backend == 'sqlite' or cfg.local_ingestion_enabled else '',
                                      section=payload['section'], page=payload.get('page'), payload=chunk_manifest(payload)))
                 generation = db.get(IndexedGeneration, document_id)
                 if not generation:
@@ -231,6 +252,12 @@ def process_request(request_id: str) -> bool:
                 document = lock_document(db, document_id)
                 request = db.get(ProcessingRequest, request_id)
                 if request and request.status in {'approved', 'processing'}:
+                    if started:
+                        if request.status != 'processing' or latest_claim(db, request) != started:
+                            return False
+                        if remaining_seconds(started) <= 0:
+                            fail_timeout(db, request, document)
+                            return False
                     code, message = _failure_details(exc, stage)
                     request.status = 'failed'
                     request.error = message
@@ -250,13 +277,16 @@ def process_document(document_id: str) -> bool:
         request_id = db.scalar(select(ProcessingRequest.id).where(ProcessingRequest.document_id == document_id,
                                                                  ProcessingRequest.status == 'approved',
                                                                  ProcessingRequest.scope_sha256 == digest_json(processing_scope())).limit(1))
-    return process_request(request_id) if request_id else False
+    if not request_id:
+        return False
+    return run_supervised(request_id)
 
 
 def process_next() -> bool:
     from kb.replacement import cleanup_replacement
+    expire_overdue()
     cleanup_replacement()
-    if not settings().opensearch_vector_search or not settings().external_models_enabled:
+    if not settings().local_ingestion_enabled and (not settings().opensearch_vector_search or not settings().external_models_enabled):
         return False
     with db_session() as db:
         request_id = db.scalar(select(ProcessingRequest.id).where(ProcessingRequest.status == 'approved',
@@ -264,7 +294,7 @@ def process_next() -> bool:
                                ProcessingRequest.scope_sha256 == digest_json(processing_scope()))
                                .order_by(ProcessingRequest.created_at).limit(1))
     if request_id:
-        process_request(request_id)
+        run_supervised(request_id)
         return True
     return False
 
@@ -284,3 +314,63 @@ def archive_expired() -> int:
             document.status = 'archived'
             audit(db, 'retention', 'document.archived', document.id)
         return sum(document.status == 'archived' for document in documents)
+
+def _worker_options() -> dict:
+    """Start the worker in its own process group, so a stuck one can be stopped with what it started."""
+    if os.name == 'nt':
+        return {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {'start_new_session': True}
+
+
+def _stop_worker(worker) -> None:
+    if os.name == 'nt':
+        # Windows has no process groups to signal (os.killpg does not exist there): taskkill /T ends
+        # the worker and the processes it started, such as the local Docling worker.
+        subprocess.run(['taskkill', '/PID', str(worker.pid), '/T', '/F'], capture_output=True, check=False)
+        return
+    try:
+        os.killpg(worker.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def run_supervised(request_id):
+    """Keep a blocked parser or provider call from occupying the queue indefinitely."""
+    with subprocess.Popen([sys.executable, '-m', 'kb.pipeline', request_id], **_worker_options()) as worker:
+        deadline = time.monotonic() + LIMIT.total_seconds()
+        started = None
+        try:
+            while worker.poll() is None:
+                wait = max(0, min(15, deadline - time.monotonic()))
+                try:
+                    worker.wait(timeout=wait)
+                    break
+                except subprocess.TimeoutExpired:
+                    with db_session() as db:
+                        request = db.get(ProcessingRequest, request_id)
+                        if request is None or request.status not in {'approved', 'processing'}:
+                            break
+                        if request.status == 'processing':
+                            claim = latest_claim(db, request)
+                            if started and claim != started:
+                                break
+                            if claim and not started:
+                                started = claim
+                                deadline = time.monotonic() + remaining_seconds(claim)
+                    if time.monotonic() >= deadline:
+                        break
+                    expire_overdue(exclude=request_id)
+        finally:
+            if worker.poll() is None:
+                _stop_worker(worker)
+                worker.wait()
+    expire_overdue()
+    with db_session() as db:
+        request = db.get(ProcessingRequest, request_id)
+        return bool(request and request.status == 'completed')
+
+
+if __name__ == '__main__':
+    from kb.telemetry import configure
+    configure()
+    process_request(sys.argv[1])

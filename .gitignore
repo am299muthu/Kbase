@@ -9,3 +9,19 @@ KM_Data/
 Initial_Project_Requirements.md
 evaluation/results*.json
 # The original requirements contain a disclosed credential. Never commit them.
+
+# Local environments, installed packages and generated graph output (may quote documents).
+.venv-graphify/
+frontend/node_modules/
+output/graph/
+output/graph-stage/
+# Earlier UI rebuilds kept as local backups; the app serves kb/static.
+frontend/
+kb/static-before-rebuild/
+kb/static-v1-slite/
+kb/static-v2-react/
+kb/static/app/
+kb/static/kbase.css
+# CML uploads: model files and Linux tools (see scripts/cml/README.md).
+models/
+tools/

@@ -10,14 +10,53 @@ from kb.config import settings
 from kb.db import Chunk, Document, IndexedGeneration, audit, db_session
 from kb.governance import require_current_approval
 from kb.processing_context import approved_transfer_scope
-from kb.search import chunk_manifest, client, index_chunks, retention_cutoff
+from kb.search import chunk_manifest, client, index_chunks, retention_cutoff, _text_model, ensure_index
 from kb.storage import ObjectStore
+
+
+def _sync_local_index(folder_id: str | None, limit: int) -> dict:
+    """Local hybrid profile: copy the chunks SQLite already holds into OpenSearch, with vectors.
+    SQLite keeps its text (the graph build and the offline demo read it), so nothing is removed and
+    no document is parsed again. A document already indexed with the current model is skipped."""
+    cfg = settings()
+    query = select(Document.id).where(Document.status == 'indexed', Document.latest_date >= retention_cutoff()).order_by(Document.id)
+    if folder_id:
+        query = query.where(Document.folder_id == folder_id)
+    with db_session() as db:
+        ids = list(db.scalars(query.limit(limit)))
+    counts = {'documents': 0, 'chunks': 0, 'skipped': 0, 'errors': 0}
+    ensure_index()
+    search = client()
+    for document_id in ids:
+        try:
+            with db_session() as db:
+                document = db.get(Document, document_id)
+                payloads = [{**row.payload, 'text': row.payload.get('text') or row.text, 'title': document.title,
+                             'latest_date': document.latest_date, 'metadata': document.metadata_json}
+                            for row in db.scalars(select(Chunk).where(Chunk.document_id == document_id).order_by(Chunk.id))]
+            if not payloads:
+                continue
+            present = search.count(index=cfg.opensearch_index, body={'query': {'bool': {'filter': [
+                {'term': {'document_id': document_id}}, {'term': {'embedding_model': _text_model()}}]}}})['count']
+            if present == len(payloads):
+                counts['skipped'] += 1
+                continue
+            search.delete_by_query(index=cfg.opensearch_index, body={'query': {'term': {'document_id': document_id}}}, refresh=True)
+            index_chunks(payloads)
+            counts['documents'] += 1
+            counts['chunks'] += len(payloads)
+        except Exception as exc:
+            counts['errors'] += 1
+            print(json.dumps({'document_id': document_id, 'error_type': type(exc).__name__}), flush=True)
+    return counts
 
 
 def reindex_documents(folder_id: str | None = None, limit: int = 1000) -> dict:
     cfg = settings()
     if cfg.search_backend != 'opensearch':
         raise ValueError('Reindex requires SEARCH_BACKEND=opensearch; it never falls back to SQLite search.')
+    if cfg.local_ingestion_enabled:
+        return _sync_local_index(folder_id, limit)
     query = select(Document.id).where(Document.status == 'indexed', Document.latest_date >= retention_cutoff()).order_by(Document.id)
     if folder_id:
         query = query.where(Document.folder_id == folder_id)

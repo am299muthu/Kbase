@@ -1,0 +1,454 @@
+# KBase ontology, draft 0.1
+# Source of truth for the graph layer. Write it here, review it like code,
+# then generate tables, Pydantic models and the JSON Schema used to limit
+# LLM extraction from this one file (LinkML generators: gen-sqlddl,
+# gen-pydantic, gen-json-schema, gen-shacl).
+# Status: draft for discussion. kb/ontology.py reads the classes annotated
+# `extraction: true` (the node types the graph builder may assign) and the
+# Predicate enum (the link types). No business-domain rules yet: the types
+# below are generic and fit any document.
+
+id: https://kbase.internal/ontology
+name: kbase_ontology
+title: KBase ontology
+version: 0.3.0
+license: internal
+description: >-
+  Eight node types and the links between them. Every link carries evidence
+  pointing at an approved document version and section, and inherits that
+  document's folder permissions.
+
+prefixes:
+  linkml: https://w3id.org/linkml/
+  kbase: https://kbase.internal/ontology/
+  skos: http://www.w3.org/2004/02/skos/core#
+  fibo-fnd-agr-ctr: https://spec.edmcouncil.org/fibo/ontology/FND/Agreements/Contracts/
+  fibo-fbc-ps: https://spec.edmcouncil.org/fibo/ontology/FBC/ProductsAndServices/FinancialProductsAndServices/
+  dcterms: http://purl.org/dc/terms/
+  prov: http://www.w3.org/ns/prov#
+
+default_prefix: kbase
+default_range: string
+
+imports:
+  - linkml:types
+
+# ---------------------------------------------------------------- classes
+
+classes:
+
+  Node:
+    abstract: true
+    description: Shared fields for every node in the graph.
+    slots:
+      - id
+      - label
+      - domain
+      - status
+
+  KnowledgeProduct:
+    is_a: Node
+    description: >-
+      A named, owned bundle of approved documents that agents and people
+      query as one unit, for example "Bancassurance product knowledge".
+    slots:
+      - owner_id
+      - steward_id
+      - access_folders
+      - contains
+      - evaluation_set
+    slot_usage:
+      owner_id:
+        required: true
+
+  Document:
+    is_a: Node
+    description: >-
+      Mirror of an approved row in the existing documents table. KBase stays
+      the system of record; the graph only references it.
+    slots:
+      - document_id
+      - version
+      - folder_id
+      - effective_from
+      - effective_to
+      - sensitivity
+      - supersedes
+      - has_section
+    slot_usage:
+      document_id:
+        required: true
+      folder_id:
+        required: true
+
+  Section:
+    is_a: Node
+    description: A heading-level part of a document, matching chunk.section.
+    slots:
+      - document_id
+      - page
+      - defines
+      - states
+
+  Product:
+    is_a: Node
+    class_uri: fibo-fbc-ps:FinancialProduct
+    description: Something the bank sells, for example a savings plan or a credit card.
+    annotations:
+      extraction: true
+    slots:
+      - product_code
+      - governed_by
+
+  Policy:
+    is_a: Node
+    class_uri: fibo-fnd-agr-ctr:Policy
+    description: >-
+      A controlled policy or procedure. The Policy node is stable across
+      versions; each version is a Document linked by evidenced_by.
+    annotations:
+      extraction: true
+    slots:
+      - policy_code
+      - evidenced_by
+
+  Rule:
+    is_a: Node
+    description: >-
+      One checkable statement taken from a section, for example an
+      eligibility limit, an exclusion or a disclosure requirement.
+    annotations:
+      extraction: true
+    slots:
+      - rule_kind
+      - statement
+      - applies_to
+
+  Term:
+    is_a: Node
+    class_uri: skos:Concept
+    description: A defined business term or concept, with synonyms and a broader term. The default when nothing else fits.
+    annotations:
+      extraction: true
+    slots:
+      - definition
+      - synonyms
+      - broader
+
+  Domain:
+    is_a: Node
+    description: A business domain such as Cards, Wealth or Bancassurance.
+
+  # Generic types for extraction before any business domain is modelled.
+  Organisation:
+    is_a: Node
+    description: A company, subsidiary, business unit, team, regulator or other body.
+    annotations:
+      extraction: true
+
+  Person:
+    is_a: Node
+    description: A named person, or a named role such as Chief Executive Officer.
+    annotations:
+      extraction: true
+
+  Process:
+    is_a: Node
+    description: A procedure, workflow or step that someone carries out.
+    annotations:
+      extraction: true
+
+  Metric:
+    is_a: Node
+    description: >-
+      A measured figure such as revenue, a ratio or a count. Its values and
+      periods stay in the evidence text; the node names the measure.
+    annotations:
+      extraction: true
+
+  Event:
+    is_a: Node
+    description: Something that happened or is scheduled, or a named period.
+    annotations:
+      extraction: true
+
+  Location:
+    is_a: Node
+    description: A country, city, region or market.
+    annotations:
+      extraction: true
+
+  Evidence:
+    description: >-
+      Why a link exists. Every link needs at least one. A link is visible to
+      a user only if they can read the folder of at least one approved
+      evidence row.
+    slots:
+      - document_id
+      - version
+      - section_label
+      - page
+      - extracted_by
+      - confidence
+      - status
+      - reviewed_by
+
+  Link:
+    description: >-
+      One edge in the graph. Stored in a single edges table; the predicate
+      says which kind of link it is.
+    slots:
+      - subject
+      - predicate
+      - object
+      - evidence
+    slot_usage:
+      evidence:
+        required: true
+        minimum_cardinality: 1
+
+  CompetencyQuestion:
+    description: >-
+      A business question the graph must answer, used as an acceptance and
+      regression test for a knowledge product.
+    slots:
+      - id
+      - question
+      - graph_path
+      - expected_answer
+      - priority
+
+# ------------------------------------------------------------------ slots
+
+slots:
+  id:
+    identifier: true
+  label:
+    required: true
+  domain:
+    range: Domain
+  status:
+    range: LifecycleStatus
+  owner_id:
+    description: Employee id of the accountable owner.
+  steward_id:
+    description: Employee id of the person who keeps it current.
+  access_folders:
+    multivalued: true
+    description: Folder ids whose grants decide who may use the product.
+  contains:
+    range: Document
+    multivalued: true
+  evaluation_set:
+    range: CompetencyQuestion
+    multivalued: true
+  document_id: {}
+  version:
+    range: integer
+  folder_id: {}
+  effective_from:
+    range: date
+  effective_to:
+    range: date
+  sensitivity:
+    range: Sensitivity
+  supersedes:
+    range: Document
+  has_section:
+    range: Section
+    multivalued: true
+  page:
+    range: integer
+  defines:
+    range: Term
+    multivalued: true
+  states:
+    range: Rule
+    multivalued: true
+  product_code: {}
+  governed_by:
+    range: Policy
+    multivalued: true
+  policy_code: {}
+  evidenced_by:
+    range: Document
+    multivalued: true
+  rule_kind:
+    range: RuleKind
+  statement: {}
+  applies_to:
+    range: Product
+    multivalued: true
+  definition: {}
+  synonyms:
+    multivalued: true
+    slot_uri: skos:altLabel
+  broader:
+    range: Term
+    slot_uri: skos:broader
+  section_label: {}
+  extracted_by:
+    range: ExtractionMethod
+  confidence:
+    range: float
+    minimum_value: 0
+    maximum_value: 1
+  reviewed_by:
+    description: Employee id of the checker who approved the link.
+  subject:
+    range: Node
+  predicate:
+    range: Predicate
+  object:
+    range: Node
+  evidence:
+    range: Evidence
+    multivalued: true
+  question: {}
+  graph_path:
+    description: The predicates walked to answer it, in plain text.
+  expected_answer: {}
+  priority:
+    range: Priority
+
+# ------------------------------------------------------------------ enums
+
+enums:
+  LifecycleStatus:
+    permissible_values:
+      proposed:
+        description: Extracted, not yet reviewed. Never used in answers.
+      approved:
+        description: Checked by a checker. Used in answers.
+      rejected:
+        description: Reviewed and refused.
+      retired:
+        description: Its source was superseded or withdrawn.
+
+  ExtractionMethod:
+    permissible_values:
+      metadata:
+        description: Read from document metadata, no model involved.
+      rule:
+        description: Found by a deterministic parser rule.
+      llm:
+        description: Proposed by the local model, then judged.
+      human:
+        description: Added by hand by a maker.
+
+  Predicate:
+    permissible_values:
+      contains:
+        description: A bundle or document contains the other item.
+      has_section:
+        description: A document has this section.
+      supersedes:
+        description: A newer document or policy replaces an older one.
+      defines:
+        description: A document, section or policy defines a term.
+      states:
+        description: A document, section or policy states a rule.
+      applies_to:
+        description: A rule or policy applies to a product, organisation, person or process.
+      governed_by:
+        description: A product, process or organisation is governed by a policy or rule.
+      evidenced_by:
+        description: A policy is evidenced by a document version.
+      broader:
+        description: A term is a narrower kind of the other term.
+      in_domain:
+        description: An item belongs to a business domain.
+      mentions:
+        description: A document or section mentions the item without saying more about it.
+      part_of:
+        description: An item is a part, unit or member of the other item.
+      owned_by:
+        description: An item is owned, run or led by an organisation or person.
+      measures:
+        description: A metric measures something about an organisation, product, process or location.
+      located_in:
+        description: An item is in, or serves, a location.
+      occurs_in:
+        description: An event or metric belongs to a period or happens at a location.
+      related_to:
+        description: Loose link that does not fit a more specific predicate.
+
+  # Kinds of document for the entity scan (kb/entities.py). DRAFT for the demo folders: the kinds,
+  # their wording and the entity types each kind is expected to be about are a first guess, for
+  # departments to correct. The GLiNER classifier reads `title` and `description` to choose a kind,
+  # so a description names the document series it should recognise. No brackets in either: the
+  # classifier refuses them. A main entity whose type is not in `expected_types` is flagged, never
+  # dropped. A kind with no `expected_types` is not checked.
+  DocumentKind:
+    permissible_values:
+      annual_report:
+        title: company annual report
+        description: >-
+          A company's yearly report to shareholders: chairman's statement, strategy, governance,
+          sustainability and full financial statements.
+        annotations:
+          expected_types: [Organisation, Person, Product, Policy, Process, Metric, Event, Location]
+      financial_statements:
+        title: financial statements
+        description: >-
+          Audited or interim financial statements: balance sheet, income statement and notes to
+          the accounts.
+        annotations:
+          expected_types: [Organisation, Product, Policy, Metric, Event, Location]
+      results_release:
+        title: results release
+        description: >-
+          A press release, media release or highlights announcing a bank's quarterly or full-year
+          results.
+        annotations:
+          expected_types: [Organisation, Person, Product, Metric, Event, Location]
+      research_note:
+        title: market research note
+        description: >-
+          Economic and market research: a daily credit note, a week in review or WIR, a research
+          monitor, a market view, a GDP or macro update, an outlook, or a survey index such as an
+          SME index. Discusses markets, economies, rates and issuers.
+        annotations:
+          # Person added after the first Finance scan: research notes are rightly about policymakers.
+          expected_types: [Organisation, Person, Product, Policy, Metric, Event, Location]
+      securities_offering:
+        title: securities offering
+        description: >-
+          A prospectus, offering circular, pricing supplement or terms and conditions of bonds,
+          notes or capital securities.
+        annotations:
+          expected_types: [Organisation, Product, Policy, Metric, Event, Location]
+      presentation:
+        title: presentation
+        description: Slides for a meeting, briefing or investor presentation.
+        annotations:
+          expected_types: [Organisation, Person, Product, Policy, Process, Metric, Event, Location]
+      policy_procedure:
+        title: policy or procedure
+        description: An internal policy, procedure, guideline or escalation rule book.
+        annotations:
+          expected_types: [Organisation, Person, Product, Policy, Process]
+      other:
+        title: other
+        description: Anything else.
+
+  RuleKind:
+    permissible_values:
+      eligibility: {}
+      exclusion: {}
+      limit: {}
+      disclosure: {}
+      process_step: {}
+
+  Sensitivity:
+    permissible_values:
+      public: {}
+      internal: {}
+      confidential: {}
+      restricted: {}
+
+  Priority:
+    permissible_values:
+      high: {}
+      medium: {}
+      low: {}

@@ -37,6 +37,21 @@ def _search_for_employee(query, top_k):
 
 
 @mcp.tool()
+def graphfacts(query: str, limit: int = 8) -> dict:
+    """Approved knowledge-graph links about entities named in the question, ONLY from the signed-in
+    employee's entitled folders. Each fact carries the indexed passage it came from."""
+    if not query.strip() or len(query) > 4000:
+        raise ValueError('Query must contain 1–4000 characters.')
+    from kb.graph_build import facts_for
+    with db_session() as db:
+        user = current(db)
+        facts = facts_for(db, user.id, query, max(1, min(int(limit), 20)))
+        audit(db, user.id, 'mcp.graphfacts', user.id, {'link_ids': [f['link_id'] for f in facts]})
+        # `evidence` lets the host re-check access to every cited passage before it answers.
+        return {'facts': facts, 'evidence': [{'id': f['chunk_id']} for f in facts]}
+
+
+@mcp.tool()
 def getdocsection(chunk_id: str) -> dict:
     """Fetch one evidence section after checking the current session and folder access again."""
     with db_session() as db:
