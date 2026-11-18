@@ -2,8 +2,8 @@
 
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = { user: null, folders: [], documents: [], employees: [], events: [], view: 'ask', folderId: null, health: null, epoch: 0, chatBusy: false, chatGeneration: 0 };
-  const viewNames = { ask: 'Ask knowledge', library: 'Document library', approvals: 'Approvals', ingestion: 'Ingestion monitor', pdfdebug: 'PDF object inspector', access: 'Folders & access', audit: 'Activity log' };
+  const state = { user: null, folders: [], documents: [], employees: [], events: [], view: 'home', folderId: null, health: null, epoch: 0, chatBusy: false, chatGeneration: 0 };
+  const viewNames = { home: 'Home', ask: 'Ask knowledge', library: 'Document library', approvals: 'Approvals', ingestion: 'Ingestion monitor', pdfdebug: 'PDF object inspector', access: 'Folders & access', audit: 'Activity log', settings: 'Processing settings', graph: 'Knowledge graph' };
   let toastTimer;
   let dialogBusy = false;
   let loginLoaded = false;
@@ -234,7 +234,6 @@
     state.chatGeneration++;
     state.chatBusy = false;
     state.user = null;
-    $('pdfdebug-back').hidden = true;
     $('pdfdebug-content').replaceChildren();
     delete $('pdfdebug-content').dataset.loaded;
     state.folders = [];
@@ -283,13 +282,14 @@
     $('user-name').textContent = user.name || user.id || 'Employee';
     $('user-unit').textContent = user.business_unit || 'Enterprise workspace';
     $('user-avatar').textContent = initials(user.name);
+    $('rail-avatar').textContent = initials(user.name);
     resetConversation();
     state.folderId = null;
-    empty($('folder-detail'), 'A place for every permission', 'Select a folder to view its business context and access grants.', 'folder');
+    empty($('folder-detail'), 'Select a folder', 'Its details and access grants appear here.', 'folder');
     $('mode-badge').textContent = 'Checking service mode';
     $('mode-badge').className = 'mode-badge';
     $('mode-title').textContent = 'Service mode';
-    $('mode-description').textContent = 'Service status is being checked. No external inference is assumed.';
+    $('mode-description').textContent = 'Checking service status.';
     const epoch = state.epoch;
     const [folders, documents] = await Promise.allSettled([api('/api/folders'), api('/api/documents')]);
     if (epoch !== state.epoch || !state.user) return;
@@ -320,13 +320,14 @@
   function route() {
     if (!state.user) return;
     const requested = location.hash.slice(1);
-    const next = Object.hasOwn(viewNames, requested) ? requested : 'ask';
+    const next = Object.hasOwn(viewNames, requested) ? requested : 'home';
     const changed = state.view !== next;
     state.view = next;
     for (const [key, title] of Object.entries(viewNames)) {
       $(`view-${key}`).hidden = key !== next;
       if (key === next) $('breadcrumb-current').textContent = title;
     }
+    // The PDF inspector has no sidebar link: it opens from the Ingestion monitor, which stays highlighted.
     const section = next === 'pdfdebug' ? 'ingestion' : next;
     for (const item of $('primary-nav').querySelectorAll('[data-view]')) {
       const active = item.dataset.view === section;
@@ -335,11 +336,15 @@
       else item.removeAttribute('aria-current');
     }
     document.title = `${viewNames[next]} | Knowledge`;
+    document.querySelectorAll('[data-rail]').forEach((node) => node.classList.toggle('active', node.dataset.rail === next));
+    requestAnimationFrame(moveIndicators);
+    document.body.dataset.currentView = next;
     closeNavigation();
     if (changed) {
       $('main-content').focus({ preventScroll: true });
       window.scrollTo({ top: 0, behavior: 'instant' });
     }
+    if (next === 'home') renderHome();
     if (next === 'library') renderDocuments();
     if (next === 'approvals') renderApprovals();
     if (next === 'pdfdebug' && !$('pdfdebug-content').dataset.loaded) loadPdfChoices().catch(alertError);
@@ -347,6 +352,1054 @@
     if (next === 'ingestion') { refreshIngestion().catch(alertError); ingestionTimer = window.setInterval(() => { if (state.user && state.view === 'ingestion' && !document.hidden) refreshIngestion().catch(() => {}); }, 5000); }
     if (next === 'access') { renderFolders(); if (state.folderId) selectFolder(state.folderId); }
     if (next === 'audit') refreshAudit().catch(alertError);
+    if (next === 'settings') loadSettings().catch(alertError);
+    if (next === 'graph') loadGraph().catch(alertError);
+  }
+
+  // ---------------------------------------------------------------- knowledge graph
+  // One graph per folder. Explorer draws entities coloured by ontology type; the review queue lists
+  // proposed links with their evidence. Owners and checkers build and review; only approved links
+  // reach answers.
+  const graphTypeColors = { Document: '#64748b', Policy: '#7c3aed', Rule: '#c2416c', Product: '#d97706', Organisation: '#2563eb',
+    Person: '#0d9488', Process: '#15803d', Metric: '#b45309', Event: '#a21caf', Location: '#0891b2', Term: '#94a3b8' };
+  const graphState = { folderId: null, data: null, ontology: null, tab: 'explore', status: 'all', search: '', selected: null, poll: null,
+    hiddenTypes: new Set(), layout: null, view: null, observer: null, mode: '2d', layout3d: null, camera3d: null };
+  async function loadGraph() {
+    const host = $('graph-content');
+    const epoch = state.epoch;
+    if (!state.folders.length) { empty(host, 'No folders', 'You need a folder grant to see its knowledge graph.', 'folder'); return; }
+    if (!graphState.folderId || !folderById(graphState.folderId)) graphState.folderId = state.folders[0].id;
+    if (!graphState.ontology) graphState.ontology = await api('/api/graph/ontology');
+    const data = await api(`/api/graph?folder_id=${encodeURIComponent(graphState.folderId)}`);
+    if (epoch !== state.epoch || state.view !== 'graph') return;
+    graphState.data = data;
+    renderGraph();
+    const running = data.builds.find((b) => ['queued', 'running'].includes(b.status));
+    window.clearTimeout(graphState.poll);
+    if (running) graphState.poll = window.setTimeout(() => { if (state.view === 'graph') loadGraph().catch(() => {}); }, 4000);
+  }
+  function graphNodesById() { return new Map(graphState.data.nodes.map((n) => [n.id, n])); }
+  function visibleLinks() {
+    const { links } = graphState.data;
+    if (graphState.status === 'all') return links.filter((l) => l.status !== 'rejected');
+    return links.filter((l) => l.status === graphState.status);
+  }
+  function renderGraph() {
+    const host = $('graph-content');
+    const data = graphState.data;
+    const toolbar = el('div', 'graph-toolbar');
+    const folderSelect = el('select'); folderSelect.setAttribute('aria-label', 'Folder');
+    state.folders.forEach((f) => option(folderSelect, f.name || f.path, f.id));
+    folderSelect.value = graphState.folderId;
+    folderSelect.addEventListener('change', () => { graphState.folderId = folderSelect.value; graphState.selected = null; loadGraph().catch(alertError); });
+    const status = el('select'); status.setAttribute('aria-label', 'Links shown');
+    [['all', 'Approved and proposed'], ['approved', 'Approved only'], ['proposed', 'Proposed only'], ['rejected', 'Rejected']].forEach(([v, t]) => option(status, t, v));
+    status.value = graphState.status;
+    status.addEventListener('change', () => { graphState.status = status.value; renderGraph(); });
+    const search = el('input'); search.type = 'search'; search.placeholder = 'Find an entity'; search.value = graphState.search;
+    search.setAttribute('aria-label', 'Find an entity');
+    search.addEventListener('change', () => { graphState.search = search.value.trim(); renderGraph(); });
+    const spacer = el('span', 'graph-spacer');
+    toolbar.append(folderSelect, status, search, spacer);
+    if (data.can_build) {
+      const build = button('Build graph', 'button primary', 'refresh');
+      build.disabled = data.builds.some((b) => ['queued', 'running'].includes(b.status));
+      build.addEventListener('click', openGraphBuild);
+      toolbar.append(build);
+    }
+    const nodes = [toolbar, graphBuildLine()];
+    const proposed = data.links.filter((l) => l.status === 'proposed').length;
+    const tabs = el('div', 'graph-tabs'); tabs.setAttribute('role', 'tablist');
+    for (const [key, label] of [['explore', 'Explorer'], ['review', `Review queue (${proposed})`], ['entities', 'Main entities']]) {
+      const tab = button(label, 'graph-tab'); tab.setAttribute('role', 'tab'); tab.setAttribute('aria-selected', String(graphState.tab === key));
+      tab.addEventListener('click', () => { graphState.tab = key; renderGraph(); });
+      tabs.append(tab);
+    }
+    nodes.push(tabs);
+    if (graphState.tab === 'entities') nodes.push(entityPanel());
+    else if (!data.nodes.length) {
+      const box = el('div'); empty(box, 'No graph yet', data.can_build ? 'Choose Build graph to read this folder\'s approved documents.' : 'A folder owner or checker can build it.', 'library');
+      nodes.push(box);
+    } else if (graphState.tab === 'review') nodes.push(graphReviewQueue());
+    else nodes.push(graphExplorer());
+    host.replaceChildren(...nodes);
+  }
+  function graphBuildLine() {
+    const build = graphState.data.builds[0];
+    const line = el('p', 'graph-build-line');
+    if (!build) { line.textContent = `Ontology ${graphState.ontology.version}. No build yet for this folder.`; return line; }
+    const when = formatDate(build.finished_at || build.created_at, true);
+    if (['queued', 'running'].includes(build.status)) line.append(el('span', 'graph-spinner'), document.createTextNode(` Building: ${build.stage}`));
+    else if (build.status === 'failed') { line.classList.add('failed'); line.textContent = `Last build failed (${when}): ${build.error}`; }
+    else {
+      const c = build.counts || {};
+      const reopened = c.reviews_reopened ? ` · ${c.reviews_reopened} approvals back to review (claim changed)` : '';
+      line.textContent = `Last build ${when} · ${c.documents} documents · ${c.nodes} entities · ${c.links} links · ${c.reviews_carried || 0} review decisions kept${reopened} · ontology ${build.ontology_version} · ${build.backend}`;
+      if ((c.notes || []).length) line.title = c.notes.join('\n');
+    }
+    return line;
+  }
+  function openGraphBuild() {
+    const body = openDialog('Build knowledge graph', 'KNOWLEDGE GRAPH');
+    const form = el('form', 'graph-build-form');
+    form.append(el('p', 'muted', 'Choose the approved documents to read. graphify extracts entities and links, then each is typed against the ontology. Every link starts as proposed until reviewed.'));
+    form.append(el('p', 'graph-warning', 'Demo setting: document text is sent to Claude through the Claude CLI. In production this step uses the internal model.'));
+    const list = el('div', 'graph-doc-list');
+    for (const doc of graphState.data.documents) {
+      const label = el('label', 'graph-doc');
+      const box = el('input'); box.type = 'checkbox'; box.value = doc.id; box.checked = !doc.large;
+      label.append(box, el('span', '', doc.title), el('small', '', doc.large ? `${doc.chunks} chunks, large: can take 30 minutes or more` : `${doc.chunks} chunks`));
+      list.append(label);
+    }
+    if (!graphState.data.documents.length) list.append(el('p', 'muted', 'This folder has no indexed documents yet.'));
+    form.append(list);
+    const error = el('p', 'inline-error'); error.hidden = true;
+    dialogActions(form, 'Start build', error, async () => {
+      const ids = [...list.querySelectorAll('input:checked')].map((b) => b.value);
+      if (!ids.length) throw new Error('Choose at least one document.');
+      await api('/api/graph/builds', { method: 'POST', body: { folder_id: graphState.folderId, document_ids: ids } });
+      $('form-dialog').close();
+      notify('Graph build started. Progress shows above the graph.');
+      await loadGraph();
+    });
+    body.append(form);
+  }
+  function seededRandom(text) {
+    let h = 2166136261;
+    for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
+    return () => { h = Math.imul(h ^ (h >>> 15), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909); h ^= h >>> 16; return (h >>> 0) / 4294967296; };
+  }
+  const graphShortLabel = (label) => (label.length > 34 ? `${label.slice(0, 32)}…` : label);
+  const graphLabelWidth = (label) => graphShortLabel(label).length * 6.6 + 10;
+  function graphLayout(nodes, links, frameW, frameH, widthOf) {
+    // One force simulation in screen pixels: repulsion, springs along links, a pull to the middle
+    // (weaker sideways, since the frame is wide), and collision between label boxes, all inside
+    // the frame. A graph too big for the frame gets a larger virtual frame and its boxes are sized
+    // for the zoom it will be shown at, so labels still do not overlap. Seeded: same graph, same picture.
+    const need = nodes.reduce((sum, n) => sum + (widthOf(n.id) + 24) * 62, 0) * 2.4;
+    const grow = Math.max(1, Math.sqrt(need / (frameW * frameH)));
+    const W = frameW * grow, H = frameH * grow, k = 1 / grow;
+    const ids = new Set(nodes.map((n) => n.id));
+    const edges = links.filter((l) => ids.has(l.source) && ids.has(l.target) && l.source !== l.target);
+    const rand = seededRandom(nodes.map((n) => n.id).sort().join('|'));
+    const pts = nodes.map((n, i) => {
+      const a = (i / nodes.length) * Math.PI * 2;
+      return { id: n.id, x: W / 2 + Math.cos(a) * W * 0.3 + rand() * 20, y: H / 2 + Math.sin(a) * H * 0.3 + rand() * 20, vx: 0, vy: 0, w: widthOf(n.id) / k, h: 48 / k };
+    });
+    const at = new Map(pts.map((p) => [p.id, p]));
+    const springLength = 150 / k, steps = 500;
+    for (let step = 0; step < steps; step++) {
+      const cool = 1 - step / steps;
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i];
+        for (let j = i + 1; j < pts.length; j++) {
+          const b = pts[j];
+          let dx = a.x - b.x, dy = a.y - b.y; const d2 = dx * dx + dy * dy + 0.01;
+          if (d2 < 360000 / (k * k)) { const f = 700 / (k * d2); dx *= f; dy *= f; a.vx += dx; a.vy += dy; b.vx -= dx; b.vy -= dy; }
+        }
+      }
+      for (const e of edges) {
+        const a = at.get(e.source), b = at.get(e.target);
+        const dx = b.x - a.x, dy = b.y - a.y; const d = Math.hypot(dx, dy) || 1; const f = (d - springLength) * 0.06;
+        a.vx += (dx / d) * f; a.vy += (dy / d) * f; b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
+      }
+      for (const p of pts) {
+        p.vx += (W / 2 - p.x) * 0.012; p.vy += (H / 2 - p.y) * 0.024;
+        const v = Math.hypot(p.vx, p.vy); const cap = (30 * cool + 0.6) / k;
+        if (v > cap) { p.vx *= cap / v; p.vy *= cap / v; }
+        p.x += p.vx; p.y += p.vy; p.vx *= 0.5; p.vy *= 0.5;
+      }
+      if (step > steps * 0.25) {
+        for (let i = 0; i < pts.length; i++) {
+          const a = pts[i];
+          for (let j = i + 1; j < pts.length; j++) {
+            const b = pts[j];
+            const ox = (a.w + b.w) / 2 + 6 / k - Math.abs(a.x - b.x), oy = (a.h + b.h) / 2 - Math.abs(a.y - b.y);
+            if (ox <= 0 || oy <= 0) continue;
+            if (oy < ox) { const s = (a.y < b.y ? -1 : 1) * oy * 0.5; a.y += s; b.y -= s; }
+            else { const s = (a.x < b.x ? -1 : 1) * ox * 0.5; a.x += s; b.x -= s; }
+          }
+        }
+      }
+      for (const p of pts) {
+        p.x = Math.min(W - p.w / 2 - 12 / k, Math.max(p.w / 2 + 12 / k, p.x));
+        p.y = Math.min(H - 44 / k, Math.max(30 / k, p.y));
+      }
+    }
+    return new Map(pts.map((p) => [p.id, { x: p.x, y: p.y }]));
+  }
+  // 3D view: a seeded 3D force layout drawn with perspective on a canvas. No library, so it runs
+  // under the app's script policy. Drag rotates, scroll zooms, a press without movement selects.
+  function graph3DLayout(nodes, links) {
+    const rand = seededRandom(`3d|${nodes.map((n) => n.id).sort().join('|')}`);
+    const pts = nodes.map((n) => ({ id: n.id, x: (rand() - 0.5) * 300, y: (rand() - 0.5) * 300, z: (rand() - 0.5) * 300, vx: 0, vy: 0, vz: 0 }));
+    const at = new Map(pts.map((p) => [p.id, p]));
+    const edges = links.filter((l) => at.has(l.source) && at.has(l.target) && l.source !== l.target);
+    const steps = 420;
+    for (let step = 0; step < steps; step++) {
+      const cool = 1 - step / steps;
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i];
+        for (let j = i + 1; j < pts.length; j++) {
+          const b = pts[j];
+          let dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z; const d2 = dx * dx + dy * dy + dz * dz + 0.01;
+          if (d2 > 300000) continue;
+          const f = 2400 / d2; dx *= f; dy *= f; dz *= f;
+          a.vx += dx; a.vy += dy; a.vz += dz; b.vx -= dx; b.vy -= dy; b.vz -= dz;
+        }
+      }
+      for (const e of edges) {
+        const a = at.get(e.source), b = at.get(e.target);
+        const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z; const d = Math.hypot(dx, dy, dz) || 1; const f = (d - 90) * 0.05;
+        a.vx += (dx / d) * f; a.vy += (dy / d) * f; a.vz += (dz / d) * f; b.vx -= (dx / d) * f; b.vy -= (dy / d) * f; b.vz -= (dz / d) * f;
+      }
+      for (const p of pts) {
+        p.vx -= p.x * 0.01; p.vy -= p.y * 0.01; p.vz -= p.z * 0.01;
+        const v = Math.hypot(p.vx, p.vy, p.vz); const cap = 20 * cool + 0.4;
+        if (v > cap) { p.vx *= cap / v; p.vy *= cap / v; p.vz *= cap / v; }
+        p.x += p.vx; p.y += p.vy; p.z += p.vz; p.vx *= 0.6; p.vy *= 0.6; p.vz *= 0.6;
+      }
+    }
+    const mx = pts.reduce((s, p) => s + p.x, 0) / pts.length, my = pts.reduce((s, p) => s + p.y, 0) / pts.length, mz = pts.reduce((s, p) => s + p.z, 0) / pts.length;
+    return new Map(pts.map((p) => [p.id, { x: p.x - mx, y: p.y - my, z: p.z - mz }]));
+  }
+  function graph3D(host, nodes, links, degree) {
+    host.classList.add('is-3d');
+    const cv = document.createElement('canvas'); cv.className = 'graph-3d';
+    cv.setAttribute('role', 'img'); cv.setAttribute('aria-label', `Knowledge graph in 3D with ${nodes.length} entities and ${links.length} links. Drag to rotate.`);
+    const ctx = cv.getContext('2d');
+    const key = `${nodes.map((n) => n.id).sort().join(',')}#${links.map((l) => l.id).sort().join(',')}`;
+    if (graphState.layout3d?.key !== key) graphState.layout3d = { key, pos: graph3DLayout(nodes, links) };
+    let pos = graphState.layout3d.pos;
+    const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (graphState.camera3d?.key !== key) graphState.camera3d = { key, yaw: 0.5, pitch: -0.3, zoom: 1, spin: !still };
+    const cam = graphState.camera3d;
+    const radiusOf = (p) => Math.hypot(p.x, p.y, p.z);
+    let R = Math.max(60, ...[...pos.values()].map(radiusOf));
+    const neighbours = new Map(nodes.map((n) => [n.id, new Set([n.id])]));
+    links.forEach((l) => { neighbours.get(l.source)?.add(l.target); neighbours.get(l.target)?.add(l.source); });
+    const sel = graphState.selected;
+    const selectedNode = sel?.kind === 'node' && neighbours.has(sel.id) ? sel.id : null;
+    const selectedLink = sel?.kind === 'link' ? links.find((l) => l.id === sel.id) : null;
+    const font = getComputedStyle(document.body).fontFamily;
+    const edgeColour = { approved: [111, 102, 105], proposed: [160, 151, 155], rejected: [227, 169, 174] };
+    let size = { w: 0, h: 0 }, hover = null, drag = null, raf = 0, last = 0, projected = [];
+
+    // Per-frame work is kept small: positions are projected into typed arrays, links are stroked in
+    // a few batches (one path per status and depth band), and each label is painted once into a
+    // small bitmap that is then stamped, since outlined text is the slowest thing a canvas draws.
+    const N = nodes.length;
+    const index = new Map(nodes.map((n, i) => [n.id, i]));
+    const edges = links.filter((l) => index.has(l.source) && index.has(l.target)).map((l) => ({ l, a: index.get(l.source), b: index.get(l.target) }));
+    const deg = nodes.map((n) => degree.get(n.id) || 0);
+    const baseR = deg.map((d) => 6 + Math.min(10, Math.sqrt(d) * 2.6));
+    const sx = new Float32Array(N), sy = new Float32Array(N), sp = new Float32Array(N), sn = new Float32Array(N);
+    const order = nodes.map((_, i) => i);
+    const byDegree = nodes.map((_, i) => i).sort((u, v) => deg[v] - deg[u] || u - v);
+    const shortLabel = nodes.map((n) => graphShortLabel(n.label));
+    const LEVELS = 6, STATUS = { approved: 0, proposed: 1, rejected: 2 }, STATUS_NAMES = ['approved', 'proposed', 'rejected'];
+    const buckets = Array.from({ length: 3 * LEVELS }, () => []);
+    const SPRITE_PX = 13, sprites = new Map(); let spriteDpr = 0;
+
+    function projectAll() {
+      const cy = Math.cos(cam.yaw), syaw = Math.sin(cam.yaw), cp = Math.cos(cam.pitch), spitch = Math.sin(cam.pitch);
+      const s = (Math.min(size.w, size.h) * 0.45 * cam.zoom) / R, hw = size.w / 2, hh = size.h / 2;
+      for (let i = 0; i < N; i++) {
+        const p = pos.get(nodes[i].id);
+        const x = p.x * cy - p.z * syaw; let z = p.x * syaw + p.z * cy;
+        const y = p.y * cp - z * spitch; z = p.y * spitch + z * cp;
+        const persp = 760 / (760 + z * s);
+        sx[i] = hw + x * s * persp; sy[i] = hh + y * s * persp; sp[i] = persp; sn[i] = 1 - (z / R + 1) / 2;
+      }
+    }
+    function litSets() {
+      const focus = hover || selectedNode;
+      const nodesLit = new Set(), edgesLit = new Set();
+      if (focus) { neighbours.get(focus).forEach((m) => nodesLit.add(m)); links.forEach((l) => { if (l.source === focus || l.target === focus) edgesLit.add(l.id); }); }
+      else if (selectedLink) { nodesLit.add(selectedLink.source); nodesLit.add(selectedLink.target); edgesLit.add(selectedLink.id); }
+      return { nodesLit, edgesLit };
+    }
+    function label(text, x, y, sizePx, colour, alpha) {
+      ctx.globalAlpha = alpha; ctx.font = `600 ${sizePx}px ${font}`; ctx.textAlign = 'center';
+      ctx.lineJoin = 'round'; ctx.lineWidth = 4; ctx.strokeStyle = '#fcfbfb'; ctx.strokeText(text, x, y);
+      ctx.fillStyle = colour; ctx.fillText(text, x, y);
+    }
+    function sprite(text) {
+      const dpr = window.devicePixelRatio || 1;
+      if (dpr !== spriteDpr) { sprites.clear(); spriteDpr = dpr; }
+      let s = sprites.get(text);
+      if (!s) {
+        ctx.font = `600 ${SPRITE_PX}px ${font}`;
+        const w = Math.ceil(ctx.measureText(text).width) + 10, h = SPRITE_PX + 10;
+        const c = document.createElement('canvas'); c.width = Math.ceil(w * dpr); c.height = Math.ceil(h * dpr);
+        const g = c.getContext('2d'); g.scale(dpr, dpr);
+        g.font = `600 ${SPRITE_PX}px ${font}`; g.textAlign = 'center'; g.lineJoin = 'round'; g.lineWidth = 4;
+        g.strokeStyle = '#fcfbfb'; g.strokeText(text, w / 2, SPRITE_PX + 2); g.fillStyle = '#2b2527'; g.fillText(text, w / 2, SPRITE_PX + 2);
+        s = { c, w, h }; sprites.set(text, s);
+      }
+      return s;
+    }
+    function nodeLabel(text, x, y, sizePx, alpha) {
+      const s = sprite(text), k = sizePx / SPRITE_PX;
+      ctx.globalAlpha = alpha; ctx.drawImage(s.c, x - (s.w * k) / 2, y - (SPRITE_PX + 2) * k, s.w * k, s.h * k);
+    }
+    function draw() {
+      const dpr = window.devicePixelRatio || 1;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, size.w, size.h);
+      projectAll();
+      const { nodesLit, edgesLit } = litSets(); const focusing = nodesLit.size > 0;
+      const rOf = (i) => baseR[i] * sp[i];
+      const lit = [];
+      for (const b of buckets) b.length = 0;
+      for (const e of edges) {
+        if (edgesLit.has(e.l.id) || selectedLink?.id === e.l.id) { lit.push(e); continue; }
+        const level = Math.min(LEVELS - 1, Math.round(((sn[e.a] + sn[e.b]) / 2) * (LEVELS - 1)));
+        buckets[(STATUS[e.l.status] ?? 1) * LEVELS + level].push(e);
+      }
+      ctx.globalAlpha = 1; ctx.lineWidth = 1.2;
+      for (let bi = 0; bi < buckets.length; bi++) {
+        const list = buckets[bi]; if (!list.length) continue;
+        const status = Math.floor(bi / LEVELS), level = bi % LEVELS;
+        let alpha = 0.22 + 0.55 * (level / (LEVELS - 1)); if (focusing) alpha *= 0.15;
+        const [r, g, bl] = edgeColour[STATUS_NAMES[status]];
+        ctx.strokeStyle = `rgba(${r},${g},${bl},${alpha})`; ctx.setLineDash(status === 0 ? [] : [5, 4]);
+        ctx.beginPath();
+        for (const e of list) { ctx.moveTo(sx[e.a], sy[e.a]); ctx.lineTo(sx[e.b], sy[e.b]); }
+        ctx.stroke();
+      }
+      for (const e of lit) {  // lit or selected links: drawn one by one, with arrowheads and names
+        const on = edgesLit.has(e.l.id);
+        const [r, g, bl] = selectedLink?.id === e.l.id ? [201, 37, 50] : [60, 54, 57];
+        let alpha = 0.22 + 0.55 * ((sn[e.a] + sn[e.b]) / 2); if (focusing && !on) alpha *= 0.15;
+        ctx.strokeStyle = `rgba(${r},${g},${bl},${on ? 1 : alpha})`; ctx.lineWidth = on ? 2 : 1.2;
+        ctx.setLineDash(e.l.status === 'approved' ? [] : [5, 4]);
+        ctx.beginPath(); ctx.moveTo(sx[e.a], sy[e.a]); ctx.lineTo(sx[e.b], sy[e.b]); ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      for (const e of lit) {
+        if (!edgesLit.has(e.l.id)) continue;
+        const colour = selectedLink?.id === e.l.id ? 'rgb(201, 37, 50)' : 'rgb(60,54,57)';
+        const ax = sx[e.a], ay = sy[e.a], bx = sx[e.b], by = sy[e.b];
+        const dx = bx - ax, dy = by - ay, d = Math.hypot(dx, dy) || 1, ux = dx / d, uy = dy / d;
+        const tipX = bx - ux * (rOf(e.b) + 3), tipY = by - uy * (rOf(e.b) + 3);
+        ctx.globalAlpha = 1; ctx.fillStyle = colour; ctx.beginPath();
+        ctx.moveTo(tipX, tipY); ctx.lineTo(tipX - ux * 9 - uy * 4.5, tipY - uy * 9 + ux * 4.5); ctx.lineTo(tipX - ux * 9 + uy * 4.5, tipY - uy * 9 - ux * 4.5); ctx.closePath(); ctx.fill();
+        if (d > 70) label(e.l.predicate.replaceAll('_', ' '), (ax + bx) / 2, (ay + by) / 2 + 3.5, 10.5, '#5b5357', 1);
+      }
+      order.sort((u, v) => sn[u] - sn[v]);
+      projected = [];
+      ctx.lineWidth = 2;
+      for (const i of order) {
+        const n = nodes[i], x = sx[i], y = sy[i], r = rOf(i), on = nodesLit.has(n.id);
+        let alpha = 0.5 + 0.5 * sn[i]; if (focusing && !on) alpha *= 0.18;
+        ctx.globalAlpha = alpha; ctx.fillStyle = graphTypeColors[n.type] || '#94a3b8';
+        ctx.beginPath();
+        if (n.type === 'Document') ctx.rect(x - r, y - r, r * 2, r * 2); else ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill(); ctx.strokeStyle = '#ffffff'; ctx.stroke();
+        if (n.id === selectedNode || n.id === hover) {
+          ctx.globalAlpha = 1; ctx.strokeStyle = graphTypeColors[n.type] || '#94a3b8';
+          ctx.beginPath(); ctx.arc(x, y, r + 5, 0, Math.PI * 2); ctx.stroke();
+        }
+        projected.push({ id: n.id, x, y, r });
+      }
+      // Labels go on last and never overlap: the hovered or selected entity first, then its lit
+      // neighbours, then the most connected entities in the front half, each only where there is room.
+      const taken = [];
+      const place = (i, alpha, force) => {
+        const s = sprite(shortLabel[i]), k = (11 + 2 * Math.min(1, Math.max(0, sp[i] - 0.6))) / SPRITE_PX;
+        const w = s.w * k, h = s.h * k, y = sy[i] + rOf(i) + 14, x0 = sx[i] - w / 2, y0 = y - (SPRITE_PX + 2) * k;
+        if (!force) for (const t of taken) if (x0 < t.x1 && x0 + w > t.x0 && y0 < t.y1 && y0 + h > t.y0) return;
+        taken.push({ x0, y0, x1: x0 + w, y1: y0 + h });
+        nodeLabel(shortLabel[i], sx[i], y, k * SPRITE_PX, alpha);
+      };
+      const focusIndex = index.get(hover || selectedNode);
+      if (focusIndex !== undefined) place(focusIndex, 1, true);
+      for (const i of byDegree) {
+        if (i === focusIndex) continue;
+        if (focusing) { if (nodesLit.has(nodes[i].id)) place(i, 1, false); }
+        else if (sn[i] > 0.45) place(i, Math.min(1, 0.35 + sn[i]), false);
+      }
+      ctx.globalAlpha = 1;
+    }
+    function frame(t) {
+      raf = 0;
+      if (!cv.isConnected) return;
+      const dt = last ? Math.min(50, t - last) : 16; last = t;
+      if (cam.spin && !drag && !hover) cam.yaw += dt * 0.00015;
+      draw();
+      if (cam.spin) raf = requestAnimationFrame(frame); else last = 0;
+    }
+    const kick = () => { if (!raf) raf = requestAnimationFrame(frame); };
+    const pick = (x, y) => { for (let i = projected.length - 1; i >= 0; i--) { const q = projected[i]; if (Math.hypot(q.x - x, q.y - y) <= q.r + 4) return q.id; } return null; };
+    const local = (event) => { const r = cv.getBoundingClientRect(); return [event.clientX - r.left, event.clientY - r.top]; };
+    cv.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      drag = { x: event.clientX, y: event.clientY, moved: 0 }; try { cv.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ } cv.classList.add('dragging');
+    });
+    cv.addEventListener('pointermove', (event) => {
+      if (drag) {
+        const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+        drag.x = event.clientX; drag.y = event.clientY; drag.moved += Math.abs(dx) + Math.abs(dy);
+        if (drag.moved > 3) { cam.yaw += dx * 0.008; cam.pitch = Math.max(-1.45, Math.min(1.45, cam.pitch + dy * 0.008)); }
+        kick(); return;
+      }
+      const id = pick(...local(event));
+      if (id !== hover) { hover = id; cv.style.cursor = id ? 'pointer' : ''; kick(); }
+    });
+    cv.addEventListener('pointerleave', () => { if (!drag && hover) { hover = null; cv.style.cursor = ''; kick(); } });
+    cv.addEventListener('pointerup', (event) => {
+      if (!drag) return;
+      const moved = drag.moved; drag = null; cv.classList.remove('dragging');
+      if (moved >= 4) { kick(); return; }
+      const id = pick(...local(event));
+      if (id) { graphState.selected = { kind: 'node', id }; renderGraph(); }
+      else if (graphState.selected) { graphState.selected = null; renderGraph(); }
+    });
+    cv.addEventListener('pointercancel', () => { drag = null; cv.classList.remove('dragging'); });
+    cv.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      const lines = event.deltaMode === 1 ? event.deltaY * 33 : event.deltaY;  // step follows the wheel distance
+      const step = Math.max(-0.4, Math.min(0.4, -lines * (event.ctrlKey ? 0.01 : 0.0011)));
+      cam.zoom = Math.max(0.3, Math.min(5, cam.zoom * Math.exp(step))); kick();
+    }, { passive: false });
+
+    const controls = el('div', 'graph-zoom');
+    for (const [text, aria, act] of [
+      ['+', 'Zoom in', () => { cam.zoom = Math.min(5, cam.zoom * 1.25); kick(); }],
+      ['−', 'Zoom out', () => { cam.zoom = Math.max(0.3, cam.zoom * 0.8); kick(); }],
+      ['Fit', 'Fit the graph to the frame', () => { cam.zoom = 1; kick(); }],
+      ['Reset', 'Lay the graph out again', () => {
+        graphState.layout3d = { key, pos: graph3DLayout(nodes, links) }; pos = graphState.layout3d.pos;
+        R = Math.max(60, ...[...pos.values()].map(radiusOf)); cam.zoom = 1; kick();
+      }],
+    ]) {
+      const b = el('button', 'graph-zoom-button', text); b.type = 'button'; b.title = aria; b.setAttribute('aria-label', aria);
+      b.addEventListener('click', act); controls.append(b);
+    }
+    const spin = el('button', 'graph-zoom-button', cam.spin ? 'Stop' : 'Spin');
+    spin.type = 'button'; spin.title = 'Turn the slow rotation on or off'; spin.setAttribute('aria-pressed', String(cam.spin));
+    spin.addEventListener('click', () => { cam.spin = !cam.spin; spin.textContent = cam.spin ? 'Stop' : 'Spin'; spin.setAttribute('aria-pressed', String(cam.spin)); kick(); });
+    controls.append(spin);
+    const keyBar = el('div', 'graph-key');
+    keyBar.append(el('span', 'approved', 'Approved'), el('span', 'proposed', 'Proposed'), el('span', 'graph-key-hint', 'Drag to rotate · scroll to zoom · nearer is darker'));
+    host.append(cv, controls, keyBar);
+
+    const observer = new ResizeObserver(() => {
+      const w = host.clientWidth, h = host.clientHeight; if (!w || !h) return;
+      const dpr = window.devicePixelRatio || 1;
+      size = { w, h }; cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.width = `${w}px`; cv.style.height = `${h}px`;
+      kick();
+    });
+    observer.observe(host);
+    graphState.observer = observer;
+  }
+  function graphModeSwitch() {
+    const box = el('div', 'graph-mode'); box.setAttribute('role', 'group'); box.setAttribute('aria-label', 'View');
+    for (const [mode, text] of [['2d', '2D'], ['3d', '3D']]) {
+      const b = el('button', 'graph-mode-button', text); b.type = 'button';
+      b.setAttribute('aria-pressed', String(graphState.mode === mode));
+      b.addEventListener('click', () => { if (graphState.mode !== mode) { graphState.mode = mode; renderGraph(); } });
+      box.append(b);
+    }
+    return box;
+  }
+  function graphExplorer() {
+    const byId = graphNodesById();
+    const hidden = graphState.hiddenTypes;
+    let links = visibleLinks().filter((l) => !hidden.has(byId.get(l.source)?.type) && !hidden.has(byId.get(l.target)?.type));
+    const degree = new Map();
+    links.forEach((l) => { degree.set(l.source, (degree.get(l.source) || 0) + 1); degree.set(l.target, (degree.get(l.target) || 0) + 1); });
+    let ids = [...degree.keys()];
+    const query = graphState.search.toLowerCase();
+    let note = '';
+    if (query) {
+      const hits = new Set(graphState.data.nodes.filter((n) => n.label.toLowerCase().includes(query)).map((n) => n.id));
+      links = links.filter((l) => hits.has(l.source) || hits.has(l.target));
+      ids = [...new Set(links.flatMap((l) => [l.source, l.target]).concat([...hits].filter((id) => degree.has(id))))];
+      note = `${hits.size} matching entities and their links`;
+    }
+    if (ids.length > 220) {
+      ids = ids.sort((a, b) => (degree.get(b) || 0) - (degree.get(a) || 0)).slice(0, 220);
+      const keep = new Set(ids); links = links.filter((l) => keep.has(l.source) && keep.has(l.target));
+      note = 'Showing the 220 most connected entities. Search to focus on others.';
+    }
+    const nodes = ids.map((id) => byId.get(id)).filter(Boolean);
+    const wrap = el('div', 'graph-split');
+    const canvas = el('div', 'graph-canvas');
+    const side = el('aside', 'graph-side');
+    wrap.append(canvas, side);
+    graphState.observer?.disconnect();
+    canvas.append(graphModeSwitch());
+    if (!nodes.length) { canvas.append(el('p', 'graph-empty', 'No links match this filter.')); graphSide(side); return wrap; }
+    if (graphState.mode === '3d') {
+      graph3D(canvas, nodes, links, degree);
+      if (note) canvas.append(el('p', 'graph-note', note));
+      graphSide(side);
+      return wrap;
+    }
+
+    const ns = 'http://www.w3.org/2000/svg';
+    const svgEl = (tag, attrs = {}, cls = '') => {
+      const node = document.createElementNS(ns, tag);
+      Object.entries(attrs).forEach(([k, v]) => node.setAttribute(k, v));
+      if (cls) node.setAttribute('class', cls);
+      return node;
+    };
+    const svg = svgEl('svg', { role: 'img', 'aria-label': `Knowledge graph with ${nodes.length} entities and ${links.length} links` }, 'graph-svg');
+    const defs = svgEl('defs');
+    for (const name of ['approved', 'proposed', 'rejected', 'lit']) {
+      const marker = svgEl('marker', { id: `graph-arrow-${name}`, viewBox: '0 0 10 10', refX: 8, refY: 5, markerWidth: 8, markerHeight: 8, markerUnits: 'userSpaceOnUse', orient: 'auto' }, `graph-arrow ${name}`);
+      marker.append(svgEl('path', { d: 'M0,1.5 L9,5 L0,8.5 z' }));
+      defs.append(marker);
+    }
+    // Everything sits in one `world` group, so panning moves a single transform. Fading is done on
+    // whole layers and the lit items are copied into `focusLayer`, so hover never restyles every element.
+    const world = svgEl('g', {}, 'graph-world');
+    const edgeLayer = svgEl('g', {}, 'graph-dim'), labelLayer = svgEl('g', {}, 'graph-dim-labels'), nodeLayer = svgEl('g', {}, 'graph-dim'), focusLayer = svgEl('g', {}, 'graph-focus');
+    // The world is its own compositor layer, so pan and zoom move a finished picture and repaint
+    // nothing. Hover puts a veil over it and draws the lit copies above, leaving the world untouched.
+    const veil = svgEl('rect', { x: 0, y: 0, width: '100%', height: '100%' }, 'graph-veil');
+    world.append(edgeLayer, labelLayer, nodeLayer);
+    svg.append(defs, world, veil, focusLayer);
+
+    const radius = (id) => 7 + Math.min(12, Math.sqrt(degree.get(id) || 0) * 3);
+    const neighbours = new Map(nodes.map((n) => [n.id, new Set([n.id])]));
+    links.forEach((l) => { neighbours.get(l.source)?.add(l.target); neighbours.get(l.target)?.add(l.source); });
+    const sel = graphState.selected;
+    const selectedNode = sel?.kind === 'node' && neighbours.has(sel.id) ? sel.id : null;
+    const selectedLink = sel?.kind === 'link' && links.some((l) => l.id === sel.id) ? sel.id : null;
+    const select = (kind, id) => { graphState.selected = id ? { kind, id } : null; renderGraph(); };
+
+    const edgeViews = links.map((l) => {
+      const g = svgEl('g', {}, `graph-edge ${l.status}${l.id === selectedLink ? ' selected' : ''}`);
+      const line = svgEl('path', {}, 'graph-edge-line'), hit = svgEl('path', {}, 'graph-edge-hit');
+      const title = svgEl('title'); title.textContent = `${l.source_label} ${l.predicate.replaceAll('_', ' ')} ${l.target_label} (${l.status})`;
+      g.append(title, line, hit);
+      const label = svgEl('text', {}, `graph-edge-label${l.id === selectedLink ? ' selected' : ''}`);
+      label.textContent = l.predicate.replaceAll('_', ' ');
+      g.addEventListener('click', () => select('link', l.id));
+      g.addEventListener('pointerenter', () => { if (!drag) focus(null, l.id); });
+      g.addEventListener('pointerleave', () => { if (!drag) rest(); });
+      edgeLayer.append(g); labelLayer.append(label);
+      return { l, g, line, hit, label };
+    });
+    const nodeViews = nodes.map((n) => {
+      const r = radius(n.id);
+      const g = svgEl('g', {}, `graph-node${n.id === selectedNode ? ' selected' : ''}${(degree.get(n.id) || 0) < 2 && nodes.length > 60 ? ' minor' : ''}`);
+      g.style.setProperty('--type', graphTypeColors[n.type] || '#94a3b8');
+      const title = svgEl('title'); title.textContent = `${n.label} (${n.type})`;
+      const halo = svgEl('circle', { r: r + 6 }, 'graph-node-halo');
+      const shape = n.type === 'Document' ? svgEl('rect', { x: -r, y: -r, width: r * 2, height: r * 2, rx: 4 }, 'graph-node-shape') : svgEl('circle', { r }, 'graph-node-shape');
+      const text = svgEl('text', { y: r + 16 }, 'graph-node-label'); text.textContent = graphShortLabel(n.label);
+      g.append(title, halo, shape, text);
+      g.addEventListener('pointerenter', () => { if (!drag) focus(n.id); });
+      g.addEventListener('pointerleave', () => { if (!drag) rest(); });
+      nodeLayer.append(g);
+      return { n, g, r };
+    });
+    const nodeView = new Map(nodeViews.map((v) => [v.n.id, v]));
+    const edgeView = new Map(edgeViews.map((v) => [v.l.id, v]));
+    const edgesOf = new Map(nodes.map((n) => [n.id, []]));
+    edgeViews.forEach((v) => {
+      edgesOf.get(v.l.source)?.push(v); edgesOf.get(v.l.target)?.push(v);
+      v.line.setAttribute('marker-end', `url(#graph-arrow-${v.l.id === selectedLink ? 'lit' : v.l.status})`);
+    });
+
+    // Hovering (or selecting) an entity keeps it and its neighbours lit and fades the rest: the two
+    // base layers fade as a whole and copies of the lit items are drawn on top at full strength.
+    let focused = null, wanted = null, focusFrame = 0;
+    function applyFocus(id, linkId) {
+      const litEdges = id ? [...(edgesOf.get(id) || [])] : [];
+      const one = linkId ? edgeView.get(linkId) : null;
+      if (one && !litEdges.includes(one)) litEdges.push(one);
+      const lit = new Set(id && nodeView.has(id) ? [id] : []);
+      litEdges.forEach((v) => { lit.add(v.l.source); lit.add(v.l.target); });
+      focused = lit.size ? { id, linkId } : null;
+      svg.classList.toggle('focusing', lit.size > 0);
+      const copy = (node) => { const c = node.cloneNode(true); c.classList.add('lit'); return c; };
+      focusLayer.replaceChildren(...litEdges.map((v) => copy(v.g)), ...litEdges.map((v) => copy(v.label)), ...[...lit].map((m) => copy(nodeView.get(m).g)));
+    }
+    function focus(id, linkId) {  // at most one change per frame, however many hover events arrive
+      wanted = [id || null, linkId || null];
+      if (!focusFrame) focusFrame = requestAnimationFrame(() => { focusFrame = 0; applyFocus(...wanted); });
+    }
+    const rest = () => focus(selectedNode, selectedLink);
+
+    // Positions are in layout units; the view maps them to screen pixels, so nodes and labels keep
+    // a readable size at any zoom. Layout and view are kept per graph, so selecting does not move it.
+    const key = `${[...ids].sort().join(',')}#${links.map((l) => l.id).sort().join(',')}`;
+    let pos = graphState.layout?.key === key ? graphState.layout.pos : null;
+    let view = graphState.view?.key === key ? graphState.view : null;
+    let size = { w: 0, h: 0 };
+    let drag = null;
+    function fit() {
+      // Labels and nodes keep their pixel size, so find the largest zoom at which the centres plus
+      // those fixed margins still fit the frame (binary search: the span grows with the zoom).
+      const items = nodes.map((n) => ({ p: pos.get(n.id), w: (labelled(n) ? graphLabelWidth(n.label) : 34) / 2 }));
+      const span = (k) => {
+        let l = Infinity, r = -Infinity, t = Infinity, b = -Infinity;
+        for (const { p, w } of items) { l = Math.min(l, p.x * k - w); r = Math.max(r, p.x * k + w); t = Math.min(t, p.y * k - 26); b = Math.max(b, p.y * k + 40); }
+        return { l, r, t, b };
+      };
+      const pad = 28;
+      let lo = 0.02, hi = 1.3;
+      for (let i = 0; i < 32; i++) {
+        const k = (lo + hi) / 2, e = span(k);
+        if (e.r - e.l <= size.w - pad * 2 && e.b - e.t <= size.h - pad * 2) lo = k; else hi = k;
+      }
+      const e = span(lo);
+      view.k = lo; view.tx = (size.w - (e.r - e.l)) / 2 - e.l; view.ty = (size.h - (e.b - e.t)) / 2 - e.t;
+    }
+    const labelled = (n) => !((degree.get(n.id) || 0) < 2 && nodes.length > 60);
+    const widthOf = (id) => { const n = byId.get(id); return labelled(n) ? graphLabelWidth(n.label) : 34; };
+    const relayout = () => { pos = graphLayout(nodes, links, size.w, size.h, widthOf); graphState.layout = { key, pos }; fit(); };
+    // Geometry is in zoomed units inside `world`; the pan is the world's own transform. A pan
+    // therefore touches one attribute, and moving one entity touches it and its own links only.
+    let showLabels = false, nodeLabels = null;
+    const place = (v) => {
+      const p = pos.get(v.n.id); v.x = p.x * view.k; v.y = p.y * view.k;
+      v.g.setAttribute('transform', `translate(${v.x.toFixed(1)},${v.y.toFixed(1)})`);
+    };
+    const route = (v) => {
+      const a = nodeView.get(v.l.source), b = nodeView.get(v.l.target);
+      const x1 = a.x, y1 = a.y, x2 = b.x, y2 = b.y;
+      const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
+      const bend = Math.min(36, len * 0.1);
+      const cx = (x1 + x2) / 2 - (dy / len) * bend, cy = (y1 + y2) / 2 + (dx / len) * bend;
+      const rs = a.r + 2, rt = b.r + 3;
+      const t0 = Math.hypot(cx - x1, cy - y1) || 1, t1 = Math.hypot(x2 - cx, y2 - cy) || 1;
+      const sx = x1 + ((cx - x1) / t0) * rs, sy = y1 + ((cy - y1) / t0) * rs;
+      const ex = x2 - ((x2 - cx) / t1) * rt, ey = y2 - ((y2 - cy) / t1) * rt;
+      const d = `M${sx.toFixed(1)},${sy.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)}`;
+      v.line.setAttribute('d', d); v.hit.setAttribute('d', d);
+      v.label.setAttribute('x', (0.25 * x1 + 0.5 * cx + 0.25 * x2).toFixed(1));
+      v.label.setAttribute('y', (0.25 * y1 + 0.5 * cy + 0.25 * y2 + 3.5).toFixed(1));
+      const shown = showLabels && len > 90;
+      if (v.shown !== shown) { v.shown = shown; v.label.classList.toggle('shown', shown); }
+    };
+    // Pan moves the world layer. While a zoom gesture is running, the finished picture of the whole
+    // graph is scaled as one layer (no repaint); the geometry is laid out again at the new zoom once
+    // the gesture pauses, which puts nodes and labels back to pixel size and makes them sharp.
+    let drawnK = 1, settle = 0, shownX = 0, shownY = 0;
+    const pan = () => {
+      shownX = view.tx; shownY = view.ty;
+      const t = `translate(${view.tx.toFixed(1)}px,${view.ty.toFixed(1)}px)`;
+      world.style.transform = t; focusLayer.style.transform = t;
+    };
+    const scaleView = () => {
+      const s = view.k / drawnK;
+      svg.style.transform = `translate(${(view.tx - s * shownX).toFixed(1)}px,${(view.ty - s * shownY).toFixed(1)}px) scale(${s.toFixed(4)})`;
+    };
+    function draw() {
+      drawnK = view.k; window.clearTimeout(settle); svg.style.transform = '';
+      pan();
+      showLabels = links.length <= 80 || view.k >= 1.2;
+      const labels = view.k >= 1.3;
+      if (labels !== nodeLabels) { nodeLabels = labels; nodeViews.forEach((v) => v.g.classList.toggle('show-label', labels)); }
+      nodeViews.forEach(place); edgeViews.forEach(route);
+      if (focused) applyFocus(focused.id, focused.linkId);  // the lit copies follow the new geometry
+    }
+    // Pointer and wheel events can arrive several times per frame; do the work once per frame.
+    let frame = 0, need = null;
+    function schedule(what) {
+      need = need === null || need === what ? what : 'all';
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0; const job = need; need = null;
+        if (job === 'zoom') scaleView();
+        else if (job === 'pan' && view.k === drawnK) pan();
+        else if (job === 'all' || view.k !== drawnK) draw();
+        else { place(job); edgesOf.get(job.n.id).forEach(route); if (focused) applyFocus(focused.id, focused.linkId); }
+      });
+    }
+    function zoomAt(mx, my, factor) {
+      if (!view) return;  // not laid out yet
+      const k = Math.max(0.15, Math.min(4, view.k * factor));
+      view.tx = mx - ((mx - view.tx) * k) / view.k; view.ty = my - ((my - view.ty) * k) / view.k; view.k = k;
+      schedule('zoom');
+      window.clearTimeout(settle); settle = window.setTimeout(() => schedule('all'), 140);
+    }
+    // The zoom step follows how far the wheel moved, so a mouse notch is a clear step and a trackpad,
+    // which sends many small events, zooms smoothly. The frame position is read once per gesture.
+    let wheelBox = null, wheelBoxTimer = 0;
+    svg.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      if (!wheelBox) { const box = canvas.getBoundingClientRect(); wheelBox = { left: box.left + canvas.clientLeft, top: box.top + canvas.clientTop }; }
+      window.clearTimeout(wheelBoxTimer); wheelBoxTimer = window.setTimeout(() => { wheelBox = null; }, 300);
+      const lines = event.deltaMode === 1 ? event.deltaY * 33 : event.deltaY;
+      const step = Math.max(-0.4, Math.min(0.4, -lines * (event.ctrlKey ? 0.01 : 0.0014)));
+      zoomAt(event.clientX - wheelBox.left, event.clientY - wheelBox.top, Math.exp(step));
+    }, { passive: false });
+    // Drag an entity to move it, drag the background to pan. A press without movement selects.
+    svg.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || event.target.closest('.graph-edge')) return;
+      const g = event.target.closest('.graph-node');
+      drag = { x: event.clientX, y: event.clientY, moved: 0, node: g ? nodeViews.find((v) => v.g === g) : null };
+      try { svg.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
+      svg.classList.add('dragging');
+    });
+    svg.addEventListener('pointermove', (event) => {
+      if (!drag || !view) return;
+      const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+      drag.x = event.clientX; drag.y = event.clientY; drag.moved += Math.abs(dx) + Math.abs(dy);
+      if (drag.node) { const p = pos.get(drag.node.n.id); p.x += dx / view.k; p.y += dy / view.k; schedule(drag.node); }
+      else { view.tx += dx; view.ty += dy; schedule('pan'); }
+    });
+    const endDrag = () => {
+      if (!drag) return;
+      const { node, moved } = drag; drag = null; svg.classList.remove('dragging');
+      if (moved < 4) {
+        if (node) select('node', node.n.id);
+        else if (graphState.selected) select(null, null);
+      }
+    };
+    svg.addEventListener('pointerup', endDrag);
+    svg.addEventListener('pointercancel', () => { drag = null; svg.classList.remove('dragging'); });
+
+    const controls = el('div', 'graph-zoom');
+    for (const [label, aria, act] of [
+      ['+', 'Zoom in', () => zoomAt(size.w / 2, size.h / 2, 1.25)],
+      ['−', 'Zoom out', () => zoomAt(size.w / 2, size.h / 2, 0.8)],
+      ['Fit', 'Fit the graph to the frame', () => { fit(); draw(); }],
+      ['Reset', 'Lay the graph out again', () => { relayout(); draw(); }],
+    ]) {
+      const b = el('button', 'graph-zoom-button', label); b.type = 'button'; b.title = aria; b.setAttribute('aria-label', aria);
+      b.addEventListener('click', act); controls.append(b);
+    }
+    const keyBar = el('div', 'graph-key');
+    keyBar.append(el('span', 'approved', 'Approved'), el('span', 'proposed', 'Proposed'));
+    if (graphState.status === 'rejected') keyBar.append(el('span', 'rejected', 'Rejected'));
+    keyBar.append(el('span', 'graph-key-hint', 'Scroll to zoom · drag to move'));
+    canvas.append(svg, controls, keyBar);
+    if (note) canvas.append(el('p', 'graph-note', note));
+
+    const observer = new ResizeObserver(() => {
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      if (!w || !h) return;
+      const first = !size.w;
+      size = { w, h }; svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+      let fresh = false;
+      if (!view) { view = { key, k: 1, tx: 0, ty: 0 }; graphState.view = view; fresh = true; }
+      if (!pos) relayout();
+      else if (fresh) fit();
+      draw();
+      if (first) applyFocus(selectedNode, selectedLink);
+    });
+    observer.observe(canvas);
+    graphState.observer = observer;
+    graphSide(side);
+    return wrap;
+  }
+  function graphSide(side) {
+    const data = graphState.data, byId = graphNodesById(), sel = graphState.selected;
+    if (sel?.kind === 'node' && byId.has(sel.id)) {
+      const node = byId.get(sel.id);
+      side.append(el('h3', '', node.label));
+      const typeRow = el('div', 'graph-type-row');
+      typeRow.append(el('span', 'graph-swatch'), el('span', '', node.type), el('small', '', node.type_source === 'human' ? 'set by a reviewer' : node.type_source === 'rule' ? 'source document' : 'set by the model'));
+      typeRow.firstChild.style.setProperty('--type', graphTypeColors[node.type] || '#94a3b8');
+      side.append(typeRow);
+      if (data.can_review && node.type !== 'Document') {
+        const select = el('select'); select.setAttribute('aria-label', 'Change entity type');
+        Object.keys(graphState.ontology.types).forEach((t) => option(select, t, t)); select.value = node.type;
+        select.addEventListener('change', async () => {
+          await api(`/api/graph/nodes/${encodeURIComponent(node.id)}`, { method: 'PATCH', body: { node_type: select.value } }).catch(alertError);
+          await loadGraph();
+        });
+        const lbl = el('label', 'graph-retype', 'Correct the type '); lbl.append(select); side.append(lbl);
+      }
+      const links = data.links.filter((l) => l.source === node.id || l.target === node.id);
+      side.append(el('h4', '', `${links.length} links`));
+      const list = el('ul', 'graph-link-list');
+      for (const l of links) {
+        const item = el('li'); const b = button('', 'graph-link-row');
+        b.append(el('span', `graph-status ${l.status}`, l.status), el('span', '', l.source === node.id ? `${l.predicate.replaceAll('_', ' ')} → ${l.target_label}` : `${l.source_label} → ${l.predicate.replaceAll('_', ' ')}`));
+        b.addEventListener('click', () => { graphState.selected = { kind: 'link', id: l.id }; renderGraph(); });
+        item.append(b); list.append(item);
+      }
+      side.append(list);
+      return;
+    }
+    if (sel?.kind === 'link') {
+      const link = data.links.find((l) => l.id === sel.id);
+      if (link) { side.append(graphLinkCard(link, true)); return; }
+    }
+    side.append(el('h3', '', 'Ontology'), el('p', 'muted small-text', `Version ${graphState.ontology.version}. Click an entity or a link for details, or a type to hide or show it.`));
+    const counts = new Map(); data.nodes.forEach((n) => counts.set(n.type, (counts.get(n.type) || 0) + 1));
+    const legend = el('ul', 'graph-legend');
+    for (const [type, description] of Object.entries({ Document: 'A source document', ...graphState.ontology.types })) {
+      const count = counts.get(type) || 0;
+      const li = el('li');
+      const item = button('', `graph-legend-item${count ? '' : ' none'}`); item.title = description;
+      item.setAttribute('aria-pressed', String(!graphState.hiddenTypes.has(type)));
+      const sw = el('span', 'graph-swatch'); sw.style.setProperty('--type', graphTypeColors[type] || '#94a3b8');
+      item.append(sw, el('span', '', type), el('small', '', String(count)));
+      item.addEventListener('click', () => {
+        if (graphState.hiddenTypes.has(type)) graphState.hiddenTypes.delete(type); else graphState.hiddenTypes.add(type);
+        renderGraph();
+      });
+      li.append(item); legend.append(li);
+    }
+    side.append(legend);
+  }
+  function graphLinkCard(link, detailed) {
+    const card = el('section', `graph-link-card ${link.status}`);
+    const head = el('div', 'graph-link-head');
+    head.append(el('strong', '', link.source_label), el('span', 'graph-predicate', link.predicate.replaceAll('_', ' ')), el('strong', '', link.target_label));
+    card.append(head);
+    const meta = el('p', 'graph-link-meta');
+    meta.append(el('span', `graph-status ${link.status}`, link.status), document.createTextNode(` ${link.confidence.toLowerCase() || 'unrated'} · score ${link.score} · found as "${link.relation.replaceAll('_', ' ')}"`));
+    if (link.reviewed_by) meta.append(document.createTextNode(` · reviewed by ${link.reviewed_by}`));
+    card.append(meta);
+    const evidence = el('div', 'graph-evidence'); evidence.append(el('p', 'muted small-text', 'Loading evidence…'));
+    card.append(evidence);
+    api(`/api/graph/links/${encodeURIComponent(link.id)}`).then((data) => {
+      evidence.replaceChildren(...(data.evidence.length ? data.evidence.map((e) => {
+        const q = el('blockquote', ''); q.append(el('p', '', e.quote), el('cite', '', `${e.title}${e.page ? `, page ${e.page}` : ''}`)); return q;
+      }) : [el('p', 'muted small-text', 'No evidence stored.')]));
+    }).catch((error) => evidence.replaceChildren(el('p', 'inline-error', error.message)));
+    if (graphState.data.can_review) {
+      const actions = el('div', 'graph-review-actions');
+      const choices = link.status === 'proposed' ? [['approve', 'Approve', 'button primary'], ['reject', 'Reject', 'button secondary']]
+        : [['reopen', 'Back to proposed', 'button secondary']];
+      for (const [decision, label, cls] of choices) {
+        const b = button(label, cls);
+        b.addEventListener('click', async () => {
+          b.disabled = true;
+          try { await api(`/api/graph/links/${encodeURIComponent(link.id)}/review`, { method: 'POST', body: { decision } }); await loadGraph(); }
+          catch (error) { alertError(error); b.disabled = false; }
+        });
+        actions.append(b);
+      }
+      card.append(actions);
+    }
+    return card;
+  }
+  function graphReviewQueue() {
+    const links = graphState.data.links.filter((l) => l.status === 'proposed').sort((a, b) => b.score - a.score);
+    const box = el('div', 'graph-review');
+    if (!links.length) { empty(box, 'Nothing to review', 'Every link in this folder has been reviewed.', 'check'); return box; }
+    if (graphState.data.can_review) {
+      const strong = links.filter((l) => l.confidence === 'EXTRACTED' && l.score >= 0.9);
+      const bar = el('div', 'graph-review-bar');
+      bar.append(el('span', 'muted small-text', `${links.length} proposed links, highest score first.`));
+      if (strong.length) {
+        const bulk = button(`Approve ${strong.length} stated links (score 0.9 or more)`, 'button secondary');
+        bulk.addEventListener('click', async () => {
+          bulk.disabled = true;
+          try {
+            await api('/api/graph/review', { method: 'POST', body: { folder_id: graphState.folderId, link_ids: strong.map((l) => l.id), decision: 'approve', note: 'bulk: extracted, score >= 0.9' } });
+            notify(`Approved ${strong.length} links.`); await loadGraph();
+          } catch (error) { alertError(error); bulk.disabled = false; }
+        });
+        bar.append(bulk);
+      }
+      box.append(bar);
+    }
+    links.slice(0, 60).forEach((l) => box.append(graphLinkCard(l, false)));
+    if (links.length > 60) box.append(el('p', 'muted small-text', `Showing the first 60 of ${links.length}. Review these to see more.`));
+    return box;
+  }
+  // Main entities: what each document is mainly about, from the entity scan (local GLiNER2.5). A second
+  // pass of the same model checks each entity's type; only confirmed entities can be main entities. A
+  // main entity whose type the document's kind is not expected to be about is flagged, never dropped.
+  const entityState = { folderId: null, data: null, poll: null, flaggedOnly: false };
+  const percent = (p) => `${Math.round((p || 0) * 100)}%`;
+  async function loadEntities() {
+    const epoch = state.epoch, folderId = graphState.folderId;
+    const data = await api(`/api/entities?folder_id=${encodeURIComponent(folderId)}`);
+    if (epoch !== state.epoch || state.view !== 'graph' || graphState.tab !== 'entities' || graphState.folderId !== folderId) return;
+    entityState.folderId = folderId; entityState.data = data;
+    renderGraph();
+    window.clearTimeout(entityState.poll);
+    if (data.scans.some((s) => ['queued', 'running'].includes(s.status))) {
+      entityState.poll = window.setTimeout(() => { if (state.view === 'graph' && graphState.tab === 'entities') loadEntities().catch(() => {}); }, 4000);
+    }
+  }
+  function entityScanLine(data) {
+    const scan = data.scans[0];
+    const line = el('p', 'graph-build-line');
+    if (!scan) { line.textContent = 'No entity scan yet. GLiNER2.5 runs on this machine; no document text is sent out.'; return line; }
+    const when = formatDate(scan.finished_at || scan.created_at, true);
+    if (['queued', 'running'].includes(scan.status)) line.append(el('span', 'graph-spinner'), document.createTextNode(` Scanning: ${scan.stage}`));
+    else if (scan.status === 'failed') { line.classList.add('failed'); line.textContent = `Last scan failed (${when}): ${scan.error}`; }
+    else {
+      const c = scan.counts || {};
+      line.textContent = `Last scan ${when} · ${c.documents} documents · ${c.entities} entities, ${c.confirmed} confirmed and ${c.disputed} disputed by the classifier · ${c.main_entities} main entities, ${c.unexpected} flagged · ${scan.model} · ontology ${scan.ontology_version}`;
+      if ((c.notes || []).length) line.title = c.notes.join('\n');
+    }
+    return line;
+  }
+  function entityChip(m, kindLabel) {
+    const chip = el('span', `entity-chip${m.fit === 'unexpected' ? ' unexpected' : ''}`);
+    const dot = el('i'); dot.style.setProperty('--type', graphTypeColors[m.type] || '#94a3b8');
+    chip.append(dot, document.createTextNode(m.label));
+    chip.title = `${m.type} · in ${m.chunks} chunks · classifier agrees ${percent(m.agreement)}`
+      + (m.fit === 'unexpected' ? ` · a ${kindLabel || 'document of this kind'} is not expected to be about a ${m.type}` : '');
+    return chip;
+  }
+  function entityPanel() {
+    const box = el('div', 'entity-panel');
+    const data = entityState.folderId === graphState.folderId ? entityState.data : null;
+    if (!data) { box.append(el('p', 'muted', 'Loading main entities…')); loadEntities().catch(alertError); return box; }
+    const running = data.scans.some((s) => ['queued', 'running'].includes(s.status));
+    const bar = el('div', 'graph-review-bar');
+    bar.append(entityScanLine(data));
+    if (data.can_scan) {
+      const scan = button(data.scans.length ? 'Scan again' : 'Scan entities', 'button secondary', 'refresh');
+      scan.disabled = running;
+      scan.addEventListener('click', async () => {
+        scan.disabled = true;
+        try {
+          await api('/api/entities/scans', { method: 'POST', body: { folder_id: graphState.folderId } });
+          notify('Entity scan started. Only new or changed chunks are read again.'); await loadEntities();
+        } catch (error) { alertError(error); scan.disabled = false; }
+      });
+      bar.append(scan);
+    }
+    box.append(bar);
+    const scanned = data.documents.filter((d) => d.scanned);
+    if (!scanned.length) {
+      const hint = el('div');
+      empty(hint, 'No entity scan yet', data.can_scan ? 'Choose Scan entities to find what each document is mainly about.' : 'A folder owner or checker can start a scan.', 'library');
+      box.append(hint); return box;
+    }
+    const flagged = scanned.filter((d) => d.unexpected).length;
+    const filter = el('label', 'entity-filter');
+    const only = el('input'); only.type = 'checkbox'; only.checked = entityState.flaggedOnly;
+    only.addEventListener('change', () => { entityState.flaggedOnly = only.checked; renderGraph(); });
+    filter.append(only, document.createTextNode(` Only documents with a flagged main entity (${flagged})`));
+    box.append(filter);
+    const table = el('table', 'entity-table');
+    const head = el('tr');
+    ['Document', 'Kind', 'Main entities', 'Type check'].forEach((t) => head.append(el('th', '', t)));
+    const thead = el('thead'); thead.append(head);
+    const body = el('tbody');
+    for (const doc of scanned.filter((d) => !entityState.flaggedOnly || d.unexpected)) {
+      const row = el('tr');
+      const title = button(doc.title, 'entity-title');
+      title.addEventListener('click', () => openEntityDocument(doc.id).catch(alertError));
+      const titleCell = el('td'); titleCell.append(title);
+      const kind = el('td', 'entity-kind', doc.kind_label || 'unknown');
+      kind.append(el('small', '', ` ${percent(doc.kind_confidence)}`));
+      const chips = el('td'); const list = el('div', 'entity-chips');
+      doc.main.forEach((m) => list.append(entityChip(m, doc.kind_label)));
+      if (!doc.main.length) list.append(el('span', 'muted small-text', 'No confirmed entity in two or more chunks'));
+      chips.append(list);
+      const counts = el('td', 'entity-counts', `${doc.confirmed} confirmed`);
+      if (doc.disputed) counts.append(el('span', 'entity-disputed', ` · ${doc.disputed} disputed`));
+      row.append(titleCell, kind, chips, counts);
+      body.append(row);
+    }
+    table.append(thead, body);
+    const scroll = el('div', 'entity-scroll'); scroll.append(table);
+    box.append(scroll, el('p', 'muted small-text', 'Dashed red: a main entity of a type this kind of document is not expected to be about. The kinds and their expected types are a draft in the ontology file. Choose a document to see every entity and the classifier\'s view of it.'));
+    return box;
+  }
+  async function openEntityDocument(documentId) {
+    const data = await api(`/api/entities/documents/${encodeURIComponent(documentId)}`);
+    const body = openDialog(data.title, 'MAIN ENTITIES');
+    const kinds = data.kind_scores.map((k) => `${k.kind} ${percent(k.p)}`).join(' · ');
+    body.append(el('p', 'muted', `Kind: ${data.kind_label || 'unknown'} (${kinds}). ${data.total} entities; showing the ${data.entities.length} in the most chunks.`));
+    const table = el('table', 'entity-table compact');
+    const head = el('tr');
+    ['Entity', 'Type', 'Chunks', 'Classifier', 'Main'].forEach((t) => head.append(el('th', '', t)));
+    const thead = el('thead'); thead.append(head);
+    const rows = el('tbody');
+    for (const e of data.entities) {
+      const row = el('tr');
+      const name = el('td'); name.append(entityChip({ ...e, fit: e.fit }, data.kind_label));
+      const check = el('td', e.check === 'confirmed' ? 'entity-ok' : 'entity-disputed',
+        e.check === 'confirmed' ? `agrees ${percent(e.agreement)}` : `disputed: reads it as ${e.hint === 'not an entity' ? 'not an entity' : `a ${e.hint}`} (${percent(e.agreement)} for ${e.type})`);
+      row.append(name, el('td', '', e.type), el('td', 'num', String(e.chunks)), check,
+        el('td', '', e.main ? (e.fit === 'unexpected' ? 'yes, flagged' : 'yes') : ''));
+      rows.append(row);
+    }
+    table.append(thead, rows);
+    const scroll = el('div', 'entity-scroll tall'); scroll.append(table);
+    body.append(scroll);
+  }
+  // Processing settings: the time limits parsing runs under. Everyone can read them; only
+  // developers (KB_DEVELOPERS on the server) can change them. Saved values apply from the next run.
+  async function loadSettings() {
+    const host = $('settings-content');
+    const epoch = state.epoch;
+    host.replaceChildren(el('p', 'muted', 'Loading settings…'));
+    let data;
+    try { data = await api('/api/settings/processing-limits'); }
+    catch (error) { if (epoch === state.epoch) host.replaceChildren(el('p', 'inline-error', error.message)); return; }
+    if (epoch === state.epoch && state.view === 'settings') renderSettings(data);
+  }
+  function renderSettings(data) {
+    const host = $('settings-content');
+    const note = el('p', 'settings-note', data.can_edit
+      ? 'Changes apply from the next document that starts processing. Approvals stay valid, and each run records the limits it used.'
+      : 'Only developers can change these limits. These are the values documents are processed with now.');
+    const form = el('form', 'content-card settings-card');
+    const head = el('div', 'card-heading');
+    head.append(el('h2', '', 'Time limits'), el('span', 'small-text muted', `${data.limits.length} settings`));
+    form.append(head);
+    const entries = new Map();
+    for (const limit of data.limits) {
+      const id = `limit-${limit.key}`;
+      const row = el('div', 'settings-row');
+      const copy = el('div', 'settings-copy');
+      const label = el('label', '', limit.label); label.htmlFor = id;
+      const help = el('p', 'field-help', limit.help); help.id = `${id}-help`;
+      const fallback = limit.environment ?? limit.default;
+      const source = el('p', 'settings-source', limit.source === 'saved'
+        ? `Saved by ${limit.updated_by} on ${formatDate(limit.updated_at, true)}`
+        : limit.source === 'environment' ? `From the server environment (${limit.key})` : 'Default value');
+      copy.append(label, help, source);
+      const side = el('div', 'settings-input');
+      const control = el('div', 'settings-control');
+      const input = el('input');
+      Object.assign(input, { type: 'number', id, min: limit.minimum, max: limit.maximum, step: 1, required: true, value: limit.value, disabled: !data.can_edit });
+      input.inputMode = 'numeric';
+      const range = el('span', 'settings-range', `${limit.minimum} to ${limit.maximum} s · default ${limit.default}`);
+      range.id = `${id}-range`;
+      input.setAttribute('aria-describedby', `${id}-help ${id}-range`);
+      control.append(input, el('span', 'settings-unit', 'seconds'));
+      side.append(control, range);
+      const entry = { input, limit, reset: false };
+      if (data.can_edit && limit.source === 'saved') {
+        const reset = button(limit.environment ? 'Use environment value' : 'Use default', 'mini-button');
+        reset.addEventListener('click', () => { entry.reset = true; input.value = fallback; status.textContent = `${limit.label} will go back to ${fallback} s when you save.`; });
+        side.append(reset);
+      }
+      input.addEventListener('input', () => { entry.reset = false; });
+      row.append(copy, side);
+      form.append(row);
+      entries.set(limit.key, entry);
+    }
+    const status = el('span', 'small-text muted'); status.setAttribute('role', 'status');
+    if (data.can_edit) {
+      const actions = el('div', 'settings-actions');
+      const save = button('Save changes', 'button primary'); save.type = 'submit';
+      actions.append(status, save);
+      form.append(actions);
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        if (!form.reportValidity()) return;
+        const values = {};
+        for (const [key, { input, limit, reset }] of entries) {
+          if (reset) values[key] = null;
+          else if (Number(input.value) !== limit.value) values[key] = Number(input.value);
+        }
+        if (!Object.keys(values).length) { status.textContent = 'Nothing has changed.'; return; }
+        save.disabled = true;
+        status.textContent = 'Saving…';
+        try {
+          const result = await api('/api/settings/processing-limits', { method: 'PUT', body: { values } });
+          renderSettings(result);
+          notify(result.changed === 1 ? 'Saved 1 change.' : `Saved ${result.changed} changes.`);
+        } catch (error) {
+          status.textContent = error.message;
+          save.disabled = false;
+        }
+      });
+    }
+    host.replaceChildren(note, form);
   }
   async function loadHealth() {
     const epoch = state.epoch;
@@ -384,8 +1437,28 @@
     $('mode-badge').title = info.description;
   }
 
+  // Recent questions are kept in this browser only, per employee, and shown on the empty Ask screen.
+  function recentKey() { return `kb.recent.${state.user?.id || 'anon'}`; }
+  function readRecent() {
+    try { const list = JSON.parse(localStorage.getItem(recentKey()) || '[]'); return Array.isArray(list) ? list.filter((q) => typeof q === 'string').slice(0, 5) : []; } catch { return []; }
+  }
+  function rememberQuestion(message) {
+    const list = [message, ...readRecent().filter((q) => q !== message)].slice(0, 5);
+    try { localStorage.setItem(recentKey(), JSON.stringify(list)); } catch { /* storage may be blocked */ }
+  }
+  function renderRecent() {
+    const list = readRecent();
+    $('recent-questions').hidden = !list.length;
+    $('recent-list').replaceChildren(...list.map((question) => {
+      const item = el('button', 'recent-item', question);
+      item.type = 'button';
+      item.addEventListener('click', () => { if (!state.chatBusy) { $('chat-input').value = question; $('chat-input').focus(); } });
+      return item;
+    }));
+  }
   function resetConversation() {
     if (state.chatBusy) return;
+    renderRecent();
     state.chatGeneration++;
     const welcome = $('chat-welcome');
     $('chat-messages').replaceChildren(welcome);
@@ -400,10 +1473,10 @@
     const article = el('article', `chat-message ${kind}`);
     const header = el('div', 'message-header');
     const avatar = el('span', `message-avatar ${kind === 'user' ? 'employee-avatar' : ''}`);
-    avatar.append(kind === 'user' ? document.createTextNode(initials(state.user?.name)) : icon('spark'));
+    avatar.append(kind === 'user' ? document.createTextNode(initials(state.user?.name)) : icon('chat'));
     const time = el('time', '', new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(new Date()));
     time.dateTime = new Date().toISOString();
-    header.append(avatar, document.createTextNode(kind === 'user' ? 'You' : 'Knowledge'), time);
+    header.append(avatar, document.createTextNode(kind === 'user' ? 'You' : 'KBase'), time);
     article.append(header);
     if (content !== undefined) article.append(el('div', 'message-text', content));
     $('chat-messages').append(article);
@@ -536,13 +1609,14 @@
     const epoch = state.epoch;
     const generation = state.chatGeneration;
     $('chat-welcome').hidden = true;
+    rememberQuestion(message);
     addMessage('user', message);
     $('chat-input').value = '';
     $('chat-input').style.height = '';
     $('chat-input').disabled = true;
     $('send-button').disabled = true;
     $('new-conversation').disabled = true;
-    const thinking = el('div', 'thinking', 'Checking permissions and finding supporting sources…');
+    const thinking = el('div', 'thinking', 'Searching your documents…');
     thinking.setAttribute('role', 'status');
     $('chat-messages').append(thinking);
     scrollChat();
@@ -625,6 +1699,100 @@
     const manageable = state.folders.filter(canManage);
     $('create-folder-button').disabled = manageable.length === 0;
     $('create-folder-button').title = manageable.length ? 'Create a subfolder with inherited business context' : 'Folder-owner or delegated-owner access is required to create a subfolder';
+    $('home-upload').disabled = $('upload-button').disabled;
+    $('home-upload').title = $('upload-button').title;
+    renderHome();
+    renderStats();
+  }
+  // Summary tiles at the top of each page, computed from data already loaded.
+  function fileExt(title) { return (String(title || '').split('.').pop() || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 5); }
+  function statTile(label, value, sub, className = '') {
+    const tile = el('div', `stat-tile ${className}`.trim());
+    tile.append(el('span', 'stat-label', label), el('strong', 'stat-value', value), el('span', 'stat-sub', sub || ''));
+    return tile;
+  }
+  function fillStrip(id, tiles) { const node = $(id); if (node) node.replaceChildren(...tiles); }
+  function renderStats() {
+    if (!state.user) return;
+    const docs = state.documents;
+    const indexed = docs.filter((d) => ['indexed', 'approved', 'ready'].includes(statusKey(d))).length;
+    const pending = docs.filter(isPending);
+    const failed = docs.filter(isFailed).length;
+    const processing = docs.filter((d) => ['processing', 'ingesting'].includes(statusKey(d))).length;
+    fillStrip('stats-library', [
+      statTile('Documents', docs.length, `${indexed} searchable`, 'hero'),
+      statTile('Pending approval', pending.length, pending.length ? 'Waiting for a checker' : 'Nothing waiting'),
+      statTile('Processing', processing, processing ? 'Being indexed now' : 'Idle'),
+      statTile('Failed', failed, failed ? 'Retry from the Ingestion monitor' : 'No failures', failed ? 'alert' : '')
+    ]);
+    const reviewCount = pending.filter(reviewable).length;
+    const ownPending = pending.filter((d) => sameId(d.maker_id, state.user.id)).length;
+    fillStrip('stats-approvals', [
+      statTile('To review', reviewCount, reviewCount ? 'You can approve these' : 'Nothing for you', 'hero'),
+      statTile('All pending', pending.length, 'In your folders'),
+      statTile('Your uploads waiting', ownPending, 'A different checker must approve')
+    ]);
+    fillStrip('stats-access', [
+      statTile('Folders', state.folders.length, 'You can access', 'hero'),
+      statTile('You manage', state.folders.filter(canManage).length, 'Owner or delegate'),
+      statTile('You can upload to', state.folders.filter(canMake).length, 'Maker access'),
+      statTile('You can review', state.folders.filter(canCheck).length, 'Checker access')
+    ]);
+    const events = state.events || [];
+    const todayText = new Date().toDateString();
+    fillStrip('stats-audit', [
+      statTile('Events loaded', events.length, 'Newest first', 'hero'),
+      statTile('Today', events.filter((e) => e.created_at && new Date(e.created_at).toDateString() === todayText).length, 'Since midnight'),
+      statTile('Your actions', events.filter((e) => sameId(e.actor_id, state.user.id)).length, 'In this list')
+    ]);
+  }
+  const HOME_ICONS = ['book', 'shield', 'library', 'folder', 'check', 'audit'];
+  const HOME_TONES = ['#c92532', '#ab1c29', '#f0624f', '#c2185b', '#8f1520', '#d97706'];
+  function renderHome() {
+    if (!state.user) return;
+    const cards = $('home-cards');
+    cards.replaceChildren();
+    const counts = new Map();
+    for (const doc of state.documents) counts.set(String(doc.folder_id), (counts.get(String(doc.folder_id)) || 0) + 1);
+    const folders = [...state.folders].sort((a, b) => (counts.get(String(b.id)) || 0) - (counts.get(String(a.id)) || 0)).slice(0, 6);
+    if (!folders.length) empty(cards, 'No folders yet', 'Ask a folder owner for access to see your knowledge here.', 'folder');
+    folders.forEach((folder, index) => {
+      const card = el('a', 'home-card');
+      card.href = '#library';
+      const symbol = icon(HOME_ICONS[index % HOME_ICONS.length]);
+      symbol.style.color = HOME_TONES[index % HOME_TONES.length];
+      const total = counts.get(String(folder.id)) || 0;
+      card.style.setProperty('--i', index);
+      const count = el('span', 'home-card-count');
+      card.append(symbol, el('h3', '', folder.name || folder.path || 'Folder'), count);
+      countUp(count, total, (n) => `${n} ${total === 1 ? 'File' : 'Files'}`);
+      card.addEventListener('click', () => { $('document-search').value = folder.name || ''; $('document-status').value = ''; });
+      cards.append(card);
+    });
+    const reviewCount = state.documents.filter(isPending).filter(reviewable).length;
+    $('home-hero-title').textContent = reviewCount ? `${reviewCount} ${reviewCount === 1 ? 'document' : 'documents'} to review` : 'Nothing to review';
+    $('home-hero-text').textContent = reviewCount ? 'Waiting for a checker decision' : 'Documents you can review will appear here';
+    const list = $('home-feed-list');
+    list.replaceChildren();
+    const recent = [...state.documents].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))).slice(0, 4);
+    if (!recent.length) empty(list, 'No documents yet', 'Uploaded documents appear here.', 'book');
+    for (const [index, doc] of recent.entries()) {
+      const folder = folderById(doc.folder_id);
+      const post = el('article', 'feed-post');
+      post.style.setProperty('--i', index);
+      const top = el('div', 'feed-post-top');
+      const who = el('div', 'feed-post-who');
+      who.append(el('strong', '', folder?.name || 'Business folder'), el('span', '', formatDate(doc.latest_date || doc.created_at)));
+      top.append(el('span', 'feed-avatar', initials(folder?.name || 'Folder')), who, statusBadge(doc));
+      const foot = el('div', 'feed-post-foot');
+      const meta = el('span', 'feed-meta');
+      meta.append(icon('file'), document.createTextNode(`v${doc.version || 1}`));
+      const open = button('Open', 'feed-open');
+      open.addEventListener('click', () => openDocumentDetails(doc));
+      foot.append(meta, open);
+      post.append(top, el('p', '', doc.title || 'Untitled document'), foot);
+      list.append(post);
+    }
   }
   async function refreshDocuments() {
     const epoch = state.epoch;
@@ -646,7 +1814,7 @@
     }).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
     $('document-count').textContent = `${docs.length} ${docs.length === 1 ? 'document' : 'documents'}`;
     if (!docs.length) {
-      empty($('document-list'), search || status ? 'No matching documents' : 'Your library starts here', search || status ? 'Try a different search or status filter.' : 'Approved, permitted documents will appear here. Makers can upload a document to start the review process.', 'book');
+      empty($('document-list'), search || status ? 'No matching documents' : 'No documents yet', search || status ? 'Try a different search or status filter.' : 'Approved documents appear here. Makers can upload one to start a review.', 'book');
       return;
     }
     const scroll = el('div', 'table-scroll');
@@ -664,7 +1832,7 @@
       const row = el('tr');
       const titleCell = el('td');
       const title = el('div', 'document-title-cell');
-      const file = el('span', 'file-icon'); file.append(icon('file'));
+      const file = el('span', 'file-icon'); file.append(icon('file')); file.dataset.ext = fileExt(doc.title);
       const copy = el('div');
       copy.append(el('div', 'document-name', doc.title || 'Untitled document'), el('div', 'document-path', doc.folder_path || folderById(doc.folder_id)?.path || 'Business folder'));
       title.append(file, copy); titleCell.append(title);
@@ -901,12 +2069,12 @@
     const docs = state.documents.filter(doc => isPending(doc) && (!mine || reviewable(doc))).sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
     const list = $('approval-list');
     if (!docs.length && mine) return empty(list, 'No requests for you to review', 'Choose All pending requests to see other submissions.', 'check');
-    if (!docs.length) return empty(list, 'You’re all caught up', 'There are no documents awaiting approval in the folders you can access.', 'check');
+    if (!docs.length) return empty(list, 'No documents waiting for review', 'Nothing is awaiting approval in your folders.', 'check');
     list.replaceChildren();
     for (const doc of docs) {
       const card = el('article', 'approval-card');
       const top = el('div', 'approval-top');
-      const file = el('span', 'file-icon'); file.append(icon('file'));
+      const file = el('span', 'file-icon'); file.append(icon('file')); file.dataset.ext = fileExt(doc.title);
       const copy = el('div'); copy.append(el('h3', '', doc.title || 'Untitled document'), el('p', '', doc.folder_path || folderById(doc.folder_id)?.path || 'Business folder'));
       top.append(file, copy, statusBadge(doc));
       const context = el('div', 'approval-context');
@@ -1011,7 +2179,7 @@
     $('ingestion-updated').textContent = `Updated ${formatDate(data.generated_at, true)} · auto-refreshes every 5 s`;
     const items = (data.items || []).filter((item) => (!filter || item.stage === filter)
       && `${item.title} ${item.folder_path}`.toLowerCase().includes(search));
-    if (!items.length) { empty($('ingestion-list'), 'Nothing to show', filter || search ? 'No documents match this filter.' : 'No ingestion activity in your folders yet.', 'upload'); return; }
+    if (!items.length) { empty($('ingestion-list'), 'No results', filter || search ? 'No documents match this filter.' : 'No ingestion activity in your folders yet.', 'upload'); return; }
     const scroll = el('div', 'table-scroll');
     scroll.tabIndex = 0;
     const table = el('table');
@@ -1070,6 +2238,7 @@
     const epoch=state.epoch;
     const data=await api('/api/ingestion');
     if (epoch !== state.epoch || host.dataset.loaded) return;
+    $('view-pdfdebug').classList.remove('inspecting');
     const files = data.items.filter(item => item.request_id && /\.pdf$/i.test(item.title))
       .sort((a, b) => b.created_at.localeCompare(a.created_at));
     if (!files.length) {
@@ -1135,99 +2304,403 @@
     stage.addEventListener('change', renderFiles);
     renderFiles();
   }
+  // Object kinds as Docling names them, grouped into families that share one colour on the page.
+  const pdfKindFamilies = {
+    text: ['Text', '#4f6bed'], paragraph: ['Text', '#4f6bed'], reference: ['Text', '#4f6bed'],
+    section_header: ['Heading', '#7c3aed'], title: ['Heading', '#7c3aed'],
+    list_item: ['List item', '#0d9488'], table: ['Table', '#15803d'], document_index: ['Table', '#15803d'],
+    caption: ['Caption', '#c2416c'], footnote: ['Footnote', '#c2416c'],
+    page_header: ['Page furniture', '#94a3b8'], page_footer: ['Page furniture', '#94a3b8'],
+    formula: ['Formula or code', '#0e7490'], code: ['Formula or code', '#0e7490'],
+  };
+  function pdfKind(kind) {
+    const key = String(kind || 'unknown').toLowerCase().split('.').pop();
+    const pretty = key.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
+    if (pdfKindFamilies[key]) return { name: pretty, family: pdfKindFamilies[key][0], color: pdfKindFamilies[key][1] };
+    if (/chart|plot|graph|diagram|picture|image|figure|logo|photo|map|icon|signature|stamp|screenshot|infographic/.test(key)) return { name: pretty, family: 'Picture or chart', color: '#d97706' };
+    return { name: pretty, family: 'Other', color: '#64748b' };
+  }
   async function openPdfInspector(item) {
     const host = $('pdfdebug-content');
+    // Opened from the Ingestion monitor; the run id marks which PDF is showing, so a slower earlier
+    // request cannot replace a newer one.
     host.dataset.loaded = item.request_id;
     location.hash = 'pdfdebug';
-    $('pdfdebug-back').hidden = false;
     const epoch = state.epoch;
     const isCurrent = () => epoch === state.epoch && host.dataset.loaded === item.request_id;
-    host.replaceChildren(el('p', '', 'Loading PDF geometry…'));
+    const back = button('Back to ingestion', 'button secondary');
+    back.addEventListener('click', () => { delete host.dataset.loaded; host.replaceChildren(); location.hash = 'ingestion'; });
+    host.replaceChildren(el('div', 'pdfi-loading', 'Loading the page geometry…'));
+    // Extracted tables and chart data are optional: the inspector still works without them.
+    const dataRequest = api(`/api/processing-requests/${encodeURIComponent(item.request_id)}/pdf-layout/data`).catch(() => ({ items: [] }));
     let data;
     try { data = await api(`/api/processing-requests/${encodeURIComponent(item.request_id)}/pdf-layout`); }
-    catch (error) {
-      if (isCurrent()) host.replaceChildren(el('p', 'inline-error', error.message));
-      return;
-    }
+    catch (error) { if (isCurrent()) host.replaceChildren(back, el('p', 'inline-error', error.message)); return; }
     if (!isCurrent()) return;
-    host.replaceChildren(el('h2', '', item.title));
-    if (data.coverage) host.append(el('p', 'muted', data.coverage));
-    const pages = [...new Set(data.objects.map(o => o.page))].sort((a,b) => a-b);
-    if (!pages.length) { host.append(el('p', '', 'No boxes were recorded for this run.')); return; }
-    const toolbar = el('div','pdf-debug-toolbar');
-    const pageSelect = el('select'); pageSelect.setAttribute('aria-label','PDF page');
-    pages.forEach(n => { const o=el('option','',`Page ${n}`); o.value=n; pageSelect.append(o); });
-    const layer = el('select'); layer.setAttribute('aria-label','Object layer');
-    [['all','All boxes'],['layout','Docling layout'],['crops','Processing crops'],['none','Original page only']].forEach(([value,label]) => {const o=el('option','',label);o.value=value;layer.append(o);});
-    const zoom = el('select'); zoom.setAttribute('aria-label','Zoom');
-    [100,150,200].forEach(n => {const o=el('option','',`${n}%`);o.value=n;zoom.append(o);});
-    toolbar.append(pageSelect,layer,zoom);host.append(toolbar);
-    const split=el('div','pdf-debug-split'), scroll=el('div','pdf-debug-scroll'), side=el('div','pdf-debug-objects');
-    scroll.tabIndex=0;scroll.setAttribute('aria-label','PDF pages, scroll to move between pages');
-    split.append(scroll,side);host.append(split);
-    let selected=null, loadError=false;
-    const ns='http://www.w3.org/2000/svg';
-    const pageViews=new Map();
-    // All pages are stacked in one scrollable area. Each page reserves its real aspect ratio so lazy images do not collapse the layout.
-    pages.forEach(n => {
-      const first=data.objects.find(o=>o.page===n).bbox;
-      const fig=el('figure','pdf-debug-page'); fig.dataset.page=n;
-      const stage=el('div','pdf-debug-stage'); stage.style.aspectRatio=`${first.page_width} / ${first.page_height}`;
-      const img=el('img'); img.alt=`Original PDF page ${n}`; img.loading='lazy'; img.decoding='async';
-      img.src=`/api/processing-requests/${encodeURIComponent(item.request_id)}/pdf-layout/page/${n}`;
-      img.addEventListener('error',()=>{if(!loadError){loadError=true;renderSide();}});
-      stage.append(img);fig.append(el('figcaption','',`Page ${n}`),stage);scroll.append(fig);
-      pageViews.set(n,{fig,stage,bbox:first});
+    const extracted = (await dataRequest).items || [];
+    if (!isCurrent()) return;
+    const dataById = new Map(extracted.map(d => [d.object_id, d]));
+    // A table or chart has a Docling layout box (layout:<ref>:<page>:<n>); a chart also has a crop
+    // (docling:<ref>:<page>). Both boxes show the same extracted data.
+    const dataFor = obj => {
+      const id = obj.object_id || '';
+      if (id.startsWith('layout:')) {
+        const parts = id.slice(7).split(':');
+        if (parts.length >= 3) return dataById.get(`docling:${parts.slice(0, -2).join(':')}:${obj.page}`);
+      }
+      return dataById.get(id);
+    };
+    // While a PDF is open the page title is hidden, so the viewer gets the height instead.
+    $('view-pdfdebug').classList.add('inspecting');
+    const objects = data.objects.map((obj, index) => {
+      const entry = { ...obj, index, kind: pdfKind(obj.object_kind), crop: obj.extractor !== 'docling-layout' };
+      entry.data = dataFor(entry);
+      return entry;
     });
-    const applyZoom = () => pageViews.forEach(v => { v.stage.style.width=`${zoom.value}%`; });
-    const drawOverlays = () => pageViews.forEach((view,n) => {
-      view.stage.querySelector('svg')?.remove();
-      if(layer.value==='none')return;
-      const b=view.bbox, svg=document.createElementNS(ns,'svg');
-      svg.setAttribute('viewBox',`0 0 ${b.page_width} ${b.page_height}`);svg.setAttribute('preserveAspectRatio','none');svg.classList.add('pdf-debug-overlay');
-      data.objects.filter(o=>o.page===n).forEach((obj,i)=>{
-        const isLayout=obj.extractor==='docling-layout';
-        if((layer.value==='layout'&&!isLayout)||(layer.value==='crops'&&isLayout))return;
-        const box=obj.bbox,color=isLayout?'#2563eb':'#d97706',on=selected===obj.object_id;
-        const rect=document.createElementNS(ns,'rect');
-        for(const [k,v] of Object.entries({x:box.left,y:box.top,width:box.right-box.left,height:box.bottom-box.top,fill:on?'#fde047':'transparent','fill-opacity':on?'.22':'0',stroke:color,'stroke-width':on?3:1}))rect.setAttribute(k,v);
-        rect.style.pointerEvents='all';rect.style.cursor='pointer';rect.addEventListener('click',()=>{selected=obj.object_id;pageSelect.value=n;drawOverlays();renderSide();});svg.append(rect);
-        const label=document.createElementNS(ns,'text');label.setAttribute('x',box.left+2);label.setAttribute('y',Math.min(box.top+11,b.page_height-2));label.setAttribute('font-size','10');label.setAttribute('fill',color);label.setAttribute('stroke','white');label.setAttribute('stroke-width','2');label.setAttribute('paint-order','stroke');label.textContent=`${i+1} ${obj.object_kind}`;svg.append(label);
-      });
-      view.stage.append(svg);
-    });
-    function renderSide() {
-      side.replaceChildren();
-      if(loadError)side.append(el('p','inline-error','Could not load an original PDF page. Check access and storage availability.'));
-      const current=Number(pageSelect.value);
-      side.append(el('h3','',`Page ${current} objects`));
-      let count=0;
-      data.objects.filter(o=>o.page===current).forEach((obj,i)=>{
-        const isLayout=obj.extractor==='docling-layout';
-        if(layer.value==='none'||(layer.value==='layout'&&!isLayout)||(layer.value==='crops'&&isLayout))return;
-        count++;
-        const entry=button(`${i+1}. ${obj.object_kind}`, 'button secondary');entry.addEventListener('click',()=>{selected=obj.object_id;drawOverlays();renderSide();});
-        const card=el('div','pdf-debug-object');if(selected===obj.object_id)card.classList.add('selected');
-        card.append(entry,el('p','muted',obj.extractor),el('code','',obj.object_id),el('pre','',JSON.stringify(obj.bbox,null,2)));side.append(card);
-      });
-      if(!count) side.append(el('p','muted',layer.value==='none'?'Boxes hidden.':'No objects recorded for this layer on this page.'));
+    // Each extracted item points back at the box to select for it (the layout box, else the crop).
+    extracted.forEach(d => { d.obj = objects.find(o => o.data === d && !o.crop) || objects.find(o => o.data === d); });
+    const tableCount = extracted.filter(d => d.kind === 'table').length, chartCount = extracted.length - tableCount;
+    const pages = [...new Set(objects.map(o => o.page))].sort((a, b) => a - b);
+    const byPage = new Map(pages.map(n => [n, objects.filter(o => o.page === n)]));
+    byPage.forEach(list => list.forEach((obj, i) => { obj.number = i + 1; }));
+    const requestPath = `/api/processing-requests/${encodeURIComponent(item.request_id)}`;
+
+    // Header: what this is, and the two ways out.
+    const head = el('div', 'pdfi-head');
+    const heading = el('div', 'pdfi-title');
+    const crops = objects.filter(o => o.crop).length;
+    const facts = [`${item.folder_path} · v${item.version}`, `${pages.length} ${pages.length === 1 ? 'page' : 'pages'} with objects`,
+      `${objects.length - crops} layout regions`, `${crops} processing crops`];
+    if (tableCount) facts.push(`${tableCount} ${tableCount === 1 ? 'table' : 'tables'} extracted`);
+    if (chartCount) facts.push(`${chartCount} ${chartCount === 1 ? 'chart' : 'charts'} read by Granite`);
+    if (data.captured_at) facts.push(`captured ${formatDate(data.captured_at, true)}`);
+    const titleText = el('div');
+    titleText.append(el('h2', '', item.title), el('p', '', facts.join('  ·  ')));
+    heading.append(icon('file'), titleText);
+    const actions = el('div', 'pdfi-actions');
+    const annotated = el('a', 'button secondary', 'Annotated PDF');
+    annotated.href = `${requestPath}/pdf-layout/annotated.pdf?layer=all`;
+    annotated.download = `${item.title.replace(/\.pdf$/i, '')}-annotated.pdf`;
+    actions.append(annotated, back);
+    head.append(heading, actions);
+    host.replaceChildren(head);
+    if (data.coverage) host.append(el('p', 'pdfi-note', data.coverage));
+    if (!pages.length) { const box = el('div'); host.append(box); empty(box, 'No boxes recorded', 'This run stored no object geometry.', 'file'); return; }
+
+    // Toolbar: page stepper, then layer and zoom as segmented controls.
+    const bar = el('div', 'pdfi-bar');
+    const pager = el('div', 'pdfi-pager');
+    const prev = button('', 'pdfi-step prev', 'chevron'); prev.setAttribute('aria-label', 'Previous page');
+    const next = button('', 'pdfi-step', 'chevron'); next.setAttribute('aria-label', 'Next page');
+    const pageSelect = el('select'); pageSelect.setAttribute('aria-label', 'PDF page');
+    pages.forEach(n => { const o = el('option', '', `Page ${n}`); o.value = n; pageSelect.append(o); });
+    pager.append(prev, pageSelect, el('span', 'pdfi-of', `of ${pages[pages.length - 1]}`), next);
+    function segmented(label, options, value) {
+      const group = el('div', 'pdfi-seg'); group.setAttribute('role', 'group'); group.setAttribute('aria-label', label);
+      group.value = value;
+      for (const [key, caption] of options) {
+        const b = button(caption, 'pdfi-seg-item'); b.dataset.value = key; b.setAttribute('aria-pressed', String(key === value));
+        b.addEventListener('click', () => {
+          if (group.value === key) return;
+          group.value = key;
+          group.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+          group.dispatchEvent(new Event('change'));
+        });
+        group.append(b);
+      }
+      return group;
     }
-    const goToPage = () => { const view=pageViews.get(Number(pageSelect.value)); if(view) scroll.scrollTo({top:view.fig.offsetTop-scroll.offsetTop-8,behavior:'smooth'}); };
-    // Keep the page selector and object list in step with whichever page is mostly in view while scrolling.
-    let ticking=false;
-    scroll.addEventListener('scroll',()=>{
-      if(ticking)return;ticking=true;
-      requestAnimationFrame(()=>{
-        ticking=false;
-        const middle=scroll.scrollTop+scroll.clientHeight/3;let best=null;
-        for(const [n,view] of pageViews){ if(view.fig.offsetTop-scroll.offsetTop<=middle) best=n; else break; }
-        if(best!==null&&String(best)!==pageSelect.value){pageSelect.value=best;renderSide();}
+    const layer = segmented('Boxes shown', [['all', 'All boxes'], ['layout', 'Layout'], ['crops', 'Crops'], ['none', 'Page only']], 'all');
+    const zoom = segmented('Zoom', [['page', 'Whole page'], ['width', 'Fit width'], ['150', '150%'], ['200', '200%']], 'page');
+    bar.append(pager, layer, zoom);
+    host.append(bar);
+
+    // Legend: one entry per kind family with its count in the whole file; selecting one hides or shows it.
+    const hidden = new Set();
+    const families = new Map();
+    objects.forEach(o => { const f = families.get(o.kind.family) || { color: o.kind.color, count: 0 }; f.count++; families.set(o.kind.family, f); });
+    const legend = el('div', 'pdfi-legend'); legend.setAttribute('role', 'group'); legend.setAttribute('aria-label', 'Object kinds; select one to hide or show it');
+    [...families.entries()].sort((a, b) => b[1].count - a[1].count).forEach(([family, info]) => {
+      const chip = button('', 'pdfi-kind'); chip.setAttribute('aria-pressed', 'true');
+      chip.style.setProperty('--kind', info.color);
+      chip.append(el('span', 'pdfi-swatch'), el('span', '', family), el('span', 'pdfi-count', info.count.toLocaleString()));
+      chip.addEventListener('click', () => {
+        if (hidden.has(family)) hidden.delete(family); else hidden.add(family);
+        chip.setAttribute('aria-pressed', String(!hidden.has(family)));
+        drawAll(); renderSide();
       });
-    },{passive:true});
-    pageSelect.addEventListener('change',()=>{renderSide();goToPage();});
-    layer.addEventListener('change',()=>{drawOverlays();renderSide();});
-    zoom.addEventListener('change',()=>{applyZoom();goToPage();});
-    applyZoom();drawOverlays();renderSide();
+      legend.append(chip);
+    });
+    if (crops) {
+      const dashedKey = el('span', 'pdfi-key');
+      dashedKey.append(el('span', 'pdfi-swatch dashed'), document.createTextNode('Dashed outline: processing crop'));
+      legend.append(dashedKey);
+    }
+    // The legend lives in the side panel (see renderSide), so the page area keeps the screen height.
+
+    const split = el('div', 'pdfi-split'), canvas = el('div', 'pdfi-canvas'), side = el('aside', 'pdfi-panel');
+    canvas.tabIndex = 0; canvas.setAttribute('aria-label', 'PDF pages. Scroll, or use the left and right arrow keys to move between pages');
+    side.setAttribute('aria-label', 'Objects on the current page');
+    split.append(canvas, side); host.append(split);
+
+    let selected = null, loadError = false;
+    const ns = 'http://www.w3.org/2000/svg';
+    const pageViews = new Map(), rects = new Map();
+    const visible = obj => !hidden.has(obj.kind.family) && layer.value !== 'none'
+      && !(layer.value === 'layout' && obj.crop) && !(layer.value === 'crops' && !obj.crop);
+    // Every page is stacked in one scroll area and reserves its real aspect ratio, so lazy images never shift the layout.
+    pages.forEach(n => {
+      const size = byPage.get(n)[0].bbox;
+      const fig = el('figure', 'pdfi-page'); fig.dataset.page = n;
+      const sheet = el('div', 'pdfi-sheet'); sheet.style.aspectRatio = `${size.page_width} / ${size.page_height}`;
+      const img = el('img'); img.alt = `Original PDF page ${n}`; img.loading = 'lazy'; img.decoding = 'async';
+      img.src = `${requestPath}/pdf-layout/page/${n}`;
+      img.addEventListener('load', () => sheet.classList.add('loaded'));
+      img.addEventListener('error', () => { sheet.classList.add('failed'); if (!loadError) { loadError = true; renderSide(); } });
+      sheet.append(img);
+      const caption = el('figcaption');
+      caption.append(el('strong', '', `Page ${n}`), el('span', '', `${byPage.get(n).length} objects`));
+      fig.append(caption, sheet); canvas.append(fig);
+      pageViews.set(n, { fig, sheet, size });
+    });
+    function drawPage(n) {
+      const view = pageViews.get(n), size = view.size;
+      view.sheet.querySelector('svg')?.remove();
+      const svg = document.createElementNS(ns, 'svg');
+      svg.setAttribute('viewBox', `0 0 ${size.page_width} ${size.page_height}`); svg.setAttribute('preserveAspectRatio', 'none');
+      svg.classList.add('pdfi-overlay');
+      const tagScale = size.page_width / 600;  // tags keep one size relative to the page
+      for (const obj of byPage.get(n)) {
+        if (!visible(obj)) continue;
+        const b = obj.bbox, g = document.createElementNS(ns, 'g');
+        g.classList.add('pdfi-box'); if (obj.crop) g.classList.add('crop'); if (selected === obj) g.classList.add('selected');
+        g.style.setProperty('--kind', obj.kind.color);
+        const rect = document.createElementNS(ns, 'rect');
+        for (const [k, v] of Object.entries({ x: b.left, y: b.top, width: b.right - b.left, height: b.bottom - b.top })) rect.setAttribute(k, v);
+        rect.classList.add('pdfi-outline');
+        const title = document.createElementNS(ns, 'title'); title.textContent = `${obj.number}. ${obj.kind.name}${obj.crop ? ' (processing crop)' : ''}`;
+        const tagH = 9 * tagScale, tagW = (5 + String(obj.number).length * 5) * tagScale, tagY = Math.max(0, b.top - tagH);
+        const tag = document.createElementNS(ns, 'rect');
+        for (const [k, v] of Object.entries({ x: b.left, y: tagY, width: tagW, height: tagH, rx: 1.5 * tagScale })) tag.setAttribute(k, v);
+        tag.classList.add('pdfi-tag');
+        const label = document.createElementNS(ns, 'text');
+        label.setAttribute('x', b.left + tagW / 2); label.setAttribute('y', tagY + tagH * 0.76); label.setAttribute('font-size', 7 * tagScale);
+        label.textContent = obj.number;
+        g.append(title, rect, tag, label);
+        g.addEventListener('click', () => select(obj, true));
+        g.addEventListener('mouseenter', () => side.querySelector(`[data-object="${obj.index}"]`)?.classList.add('hover'));
+        g.addEventListener('mouseleave', () => side.querySelector(`[data-object="${obj.index}"]`)?.classList.remove('hover'));
+        rects.set(obj.index, g);
+        svg.append(g);
+      }
+      view.sheet.append(svg);
+    }
+    const drawAll = () => { rects.clear(); pages.forEach(drawPage); };
+    function select(obj, fromPage) {
+      if (selected) rects.get(selected.index)?.classList.remove('selected');
+      selected = selected === obj ? null : obj;
+      if (selected) {
+        rects.get(selected.index)?.classList.add('selected');
+        if (String(selected.page) !== pageSelect.value) pageSelect.value = selected.page;
+      }
+      renderSide();
+      if (selected && fromPage) side.querySelector(`[data-object="${selected.index}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+    function detail(obj) {
+      const b = obj.bbox, w = b.right - b.left, h = b.bottom - b.top;
+      const share = Math.round(w * h / (b.page_width * b.page_height) * 1000) / 10;
+      const list = el('dl', 'pdfi-detail');
+      for (const [term, value] of [['Kind', obj.object_kind], ['Found by', obj.crop ? `${obj.extractor}, processing crop` : 'Docling layout'],
+        ['Position', `${b.left.toFixed(1)} from left, ${b.top.toFixed(1)} from top`], ['Size', `${w.toFixed(1)} × ${h.toFixed(1)} pt, ${share}% of the page`],
+        ['Object ID', obj.object_id]]) list.append(el('dt', '', term), el('dd', term === 'Object ID' ? 'mono' : '', value));
+      if (!obj.data) return list;
+      const wrap = el('div', 'pdfi-detail-wrap');
+      wrap.append(list, dataBlock(obj.data, false));
+      return wrap;
+    }
+    // One extracted table or chart: its rows as a table, where it came from, and how far to trust it.
+    // In the Data list it also names the page and offers to show the object on the page.
+    const numeric = /^[-+−(]?[$€£S]*\s*[\d.,]+\s*[%)]?[a-z]{0,2}$/i;
+    function dataBlock(d, inList) {
+      const box = el('section', `pdfi-reading ${d.kind}${inList && selected && selected.data === d ? ' selected' : ''}`);
+      const head = el('div', 'pdfi-reading-head');
+      const title = el('h4', '', d.kind === 'table' ? 'Table data' : d.mode === 'summary' ? 'Chart summary' : 'Chart data');
+      if (inList) title.prepend(el('span', 'pdfi-reading-page', `Page ${d.page}`));
+      const timing = d.seconds ? `, ${Number(d.seconds).toFixed(1)} s` : '';
+      head.append(title, el('span', '', d.kind === 'table' ? 'Docling table structure' : `${d.source}${timing}`));
+      box.append(head);
+      if (d.caption) box.append(el('p', 'pdfi-reading-caption', d.caption));
+      // The worker compared Granite's numbers with the numbers printed in the PDF inside the chart.
+      if (d.check) {
+        const { status, matched, total, totals_off: totalsOff } = d.check;
+        const [label, tone] = totalsOff ? [`Totals do not add up in ${totalsOff} ${totalsOff === 1 ? 'row' : 'rows'}; check the cells against the chart`, 'bad'] : {
+          matches: [`Numbers match the PDF text: ${matched} of ${total}`, 'ok'],
+          partial: [`Only some numbers match the PDF text: ${matched} of ${total}`, 'warn'],
+          'not-found': [`Numbers not found in the PDF text: ${matched} of ${total}`, 'bad'],
+          'no-text': ['Not checked: the PDF has no text for this chart', 'none'],
+          'no-numbers': ['Not checked: the reading has no numbers', 'none'],
+        }[status] || ['Not checked', 'none'];
+        box.append(el('p', `pdfi-check ${tone}`, label));
+      }
+      if (d.rows?.length) {
+        const scroll = el('div', 'pdfi-reading-scroll');
+        scroll.tabIndex = 0;
+        scroll.setAttribute('aria-label', `${d.kind === 'table' ? 'Table' : 'Chart'} data on page ${d.page}, ${d.rows.length} rows; scroll for more`);
+        const table = el('table');
+        const [header, ...body] = d.rows;
+        const headRow = table.createTHead().insertRow();
+        header.forEach(cell => { const th = el('th', '', cell); th.scope = 'col'; headRow.append(th); });
+        const tbody = table.createTBody();
+        body.forEach(cells => {
+          const row = tbody.insertRow();
+          cells.forEach((cell, i) => {
+            if (i === 0) { const th = el('th', '', cell); th.scope = 'row'; row.append(th); return; }
+            const td = row.insertCell(); td.textContent = cell; if (numeric.test(cell)) td.className = 'num';
+          });
+        });
+        scroll.append(table);
+        box.append(scroll);
+      } else if (d.text) {
+        box.append(el('p', 'pdfi-reading-text', d.text));
+      }
+      const foot = el('div', 'pdfi-reading-foot');
+      foot.append(el('p', 'pdfi-reading-note', d.kind === 'table'
+        ? `${d.rows.length} rows. Structure found by Docling; cell text taken from the PDF. A cell that spans columns repeats its text in each.`
+        : d.mode === 'summary'
+          ? `${d.note ? `${d.note}. ` : ''}A model's description of the chart, not text from the PDF.`
+          : d.check?.status === 'matches'
+            ? 'A model reading. Every number is printed on the page, but check that each sits in the right row and column.'
+            : 'A model reading of the picture, not text from the PDF. Check the numbers against the chart before relying on them.'));
+      if (inList && d.obj) {
+        const show = button('Show on page', 'mini-button');
+        show.setAttribute('aria-label', `Show this ${d.kind} on page ${d.page}`);
+        show.addEventListener('click', () => { if (selected !== d.obj) select(d.obj, false); goToPage(); });
+        foot.append(show);
+      }
+      box.append(foot);
+      return box;
+    }
+    // The side panel has two views: the objects on the current page, and the extracted tables and charts.
+    let panelView = 'objects', dataScope = 'page', lastDataKey = '';
+    const panelTabs = segmented('Side panel', [['objects', 'Objects'], ['data', 'Tables and charts']], 'objects');
+    panelTabs.classList.add('pdfi-tabs');
+    panelTabs.querySelector('[data-value="data"]').append(el('span', 'pdfi-tab-count', extracted.length));
+    panelTabs.addEventListener('change', () => {
+      panelView = panelTabs.value; lastDataKey = '';
+      split.classList.toggle('wide', panelView === 'data');
+      renderSide();
+    });
+    const tabsNode = () => (extracted.length ? [panelTabs] : []);
+    const updatePager = current => {
+      prev.disabled = pages.indexOf(current) <= 0;
+      next.disabled = pages.indexOf(current) >= pages.length - 1;
+    };
+    function renderData(current) {
+      // Scrolling the pages calls this often; rebuild only when what it shows has changed.
+      const key = `${dataScope}|${dataScope === 'page' ? current : ''}|${selected ? selected.index : ''}`;
+      if (key === lastDataKey) return;
+      lastDataKey = key;
+      const keepScroll = side.querySelector('.pdfi-data-list')?.scrollTop || 0;
+      const items = dataScope === 'page' ? extracted.filter(d => d.page === current) : extracted;
+      const head = el('div', 'pdfi-panel-head');
+      const scope = segmented('Show tables and charts from', [['page', `Page ${current}`], ['all', 'Whole file']], dataScope);
+      scope.classList.add('pdfi-scope');
+      scope.addEventListener('change', () => { dataScope = scope.value; renderSide(); });
+      const tables = items.filter(d => d.kind === 'table').length;
+      head.append(scope, el('span', '', `${tables} ${tables === 1 ? 'table' : 'tables'}, ${items.length - tables} ${items.length - tables === 1 ? 'chart' : 'charts'}`));
+      const list = el('div', 'pdfi-data-list');
+      items.forEach(d => list.append(dataBlock(d, true)));
+      side.replaceChildren(...tabsNode(), head, items.length ? list
+        : el('p', 'pdfi-empty', dataScope === 'page' ? 'No tables or charts were extracted on this page.' : 'No tables or charts were extracted from this file.'));
+      if (dataScope === 'all') list.scrollTop = keepScroll;
+    }
+    function renderSide() {
+      const current = Number(pageSelect.value);
+      updatePager(current);
+      if (panelView === 'data') { renderData(current); return; }
+      const all = byPage.get(current) || [];
+      const shown = all.filter(visible);
+      const top = el('div', 'pdfi-panel-head');
+      top.append(el('h3', '', `Page ${current}`), el('span', '', layer.value === 'none' ? 'boxes hidden' : `${shown.length} of ${all.length} objects`));
+      const nodes = [...tabsNode(), top, legend];
+      if (loadError) nodes.push(el('p', 'inline-error', 'Some original pages could not be loaded. Check access and storage availability.'));
+      const list = el('ol', 'pdfi-list');
+      for (const obj of shown) {
+        const li = el('li', `pdfi-item${selected === obj ? ' selected' : ''}`); li.dataset.object = obj.index;
+        li.style.setProperty('--kind', obj.kind.color);
+        const row = el('button', 'pdfi-row'); row.type = 'button'; row.setAttribute('aria-expanded', String(selected === obj));
+        const b = obj.bbox;
+        const name = el('span', 'pdfi-name', obj.kind.name);
+        if (obj.data) name.append(el('span', `pdfi-data-tag ${obj.data.kind}`,
+          obj.data.kind === 'table' ? 'Table data' : obj.data.mode === 'summary' ? 'Chart summary' : 'Chart data'));
+        row.append(el('span', `pdfi-num${obj.crop ? ' crop' : ''}`, obj.number), name,
+          el('span', 'pdfi-size', `${Math.round(b.right - b.left)} × ${Math.round(b.bottom - b.top)} pt`));
+        row.addEventListener('click', () => select(obj, false));
+        li.addEventListener('mouseenter', () => rects.get(obj.index)?.classList.add('hover'));
+        li.addEventListener('mouseleave', () => rects.get(obj.index)?.classList.remove('hover'));
+        li.append(row);
+        if (selected === obj) li.append(detail(obj));
+        list.append(li);
+      }
+      if (shown.length) nodes.push(list);
+      else nodes.push(el('p', 'pdfi-empty', layer.value === 'none' ? 'Boxes are hidden. Choose a layer above to show them.' : 'Nothing of the shown kinds on this page.'));
+      side.replaceChildren(...nodes);
+    }
+    // Smooth only for short moves; a jump across many pages lands at once.
+    const goToPage = (smooth = true) => {
+      const view = pageViews.get(Number(pageSelect.value)); if (!view) return;
+      const top = view.fig.offsetTop - canvas.offsetTop - 16;
+      const near = Math.abs(top - canvas.scrollTop) < canvas.clientHeight * 2.5;
+      canvas.scrollTo({ top, behavior: smooth && near ? 'smooth' : 'auto' });
+    };
+    const step = delta => { const i = pages.indexOf(Number(pageSelect.value)) + delta; if (i >= 0 && i < pages.length) { pageSelect.value = pages[i]; renderSide(); goToPage(); } };
+    // Keep the page selector and object list in step with whichever page is mostly in view while scrolling.
+    let ticking = false;
+    canvas.addEventListener('scroll', () => {
+      if (ticking) return; ticking = true;
+      requestAnimationFrame(() => {
+        ticking = false;
+        const middle = canvas.scrollTop + canvas.clientHeight / 3; let best = null;
+        for (const [n, view] of pageViews) { if (view.fig.offsetTop - canvas.offsetTop <= middle) best = n; else break; }
+        if (best !== null && String(best) !== pageSelect.value) { pageSelect.value = best; renderSide(); }
+      });
+    }, { passive: true });
+    // A property, not a listener: the host element outlives each inspector session.
+    host.onkeydown = event => {
+      if (event.key === 'Escape' && selected) select(selected, false);
+      if (event.target === canvas && (event.key === 'ArrowRight' || event.key === 'ArrowLeft')) { event.preventDefault(); step(event.key === 'ArrowRight' ? 1 : -1); }
+    };
+    prev.addEventListener('click', () => step(-1));
+    next.addEventListener('click', () => step(1));
+    pageSelect.addEventListener('change', () => { renderSide(); goToPage(); });
+    layer.addEventListener('change', () => { drawAll(); renderSide(); });
+    // The viewer fills the rest of the screen: its height is what is left below it in the scrolling workspace.
+    function sizeViewer() {
+      const body = canvas.closest('.workspace-body');
+      if (!body || window.matchMedia('(max-width: 760px)').matches) { split.style.removeProperty('--view-h'); return; }
+      const top = canvas.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop;
+      split.style.setProperty('--view-h', `${Math.max(440, Math.floor(body.clientHeight - top - 16))}px`);
+    }
+    // Whole page: every sheet is sized so the full page fits the visible area, whatever its shape.
+    function fitPages() {
+      canvas.dataset.zoom = zoom.value;
+      const style = getComputedStyle(canvas);
+      const caption = pageViews.values().next().value?.fig.querySelector('figcaption')?.offsetHeight || 0;
+      const width = canvas.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const height = canvas.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) - caption;
+      pageViews.forEach(view => {
+        const ratio = view.size.page_width / view.size.page_height;
+        view.sheet.style.width = zoom.value === 'page' ? `${Math.max(120, Math.floor(Math.min(width, height * ratio)))}px`
+          : zoom.value === 'width' ? '100%' : `${zoom.value}%`;
+      });
+    }
+    zoom.addEventListener('change', () => { fitPages(); goToPage(false); });
+    host._pdfiObserver?.disconnect();
+    host._pdfiObserver = new ResizeObserver(() => { if (!canvas.isConnected) { host._pdfiObserver.disconnect(); return; } fitPages(); });
+    host._pdfiObserver.observe(canvas);
+    const onResize = () => { if (!canvas.isConnected) { window.removeEventListener('resize', onResize); return; } sizeViewer(); };
+    window.addEventListener('resize', onResize);
+    drawAll(); renderSide(); sizeViewer(); fitPages();
   }
 
   function openIngestionDetails(item) {
@@ -1348,6 +2821,7 @@
     if (!state.folders.length) return empty(list, 'No accessible folders', 'Ask a folder owner to grant you access.', 'folder');
     for (const folder of [...state.folders].sort((a, b) => String(a.path || a.name).localeCompare(String(b.path || b.name)))) {
       const node = button('', 'folder-button');
+      node.style.setProperty('--tone', HOME_TONES[[...String(folder.id)].reduce((sum, ch) => sum + ch.charCodeAt(0), 0) % HOME_TONES.length]);
       node.classList.toggle('selected', sameId(folder.id, state.folderId));
       node.setAttribute('aria-pressed', String(sameId(folder.id, state.folderId)));
       const copy = el('span', '', folder.name || folder.path);
@@ -1494,12 +2968,15 @@
     const search = $('audit-search').value.toLowerCase().trim();
     const events = state.events.filter((event) => `${event.action || ''} ${event.actor_id || ''} ${event.target_id || ''} ${safeJSON(event.details)}`.toLowerCase().includes(search));
     $('audit-result-count').textContent = `${events.length} of ${state.events.length} loaded events`;
+    renderStats();
     const list = $('audit-list');
     if (!events.length) return empty(list, search ? 'No matching activity' : 'No activity to show yet', search ? 'Try another action, employee ID, or record.' : 'Recorded actions will appear here as your workspace is used.', 'audit');
     list.replaceChildren();
     for (const event of events) {
       const row = el('article', 'activity-row');
-      const symbol = el('span', 'activity-icon'); symbol.append(icon('audit'));
+      const kind = String(event.action || '').split('.')[0].split('_')[0];
+      const kindIcon = { auth: 'user', chat: 'chat', mcp: 'search', document: 'file', ingestion: 'upload', folder: 'folder', access: 'folder', governance: 'check', approval: 'check' }[kind] || 'audit';
+      const symbol = el('span', 'activity-icon'); symbol.dataset.kind = kind; symbol.append(icon(kindIcon));
       const body = el('div', 'activity-body');
       const heading = el('div', 'activity-heading');
       const date = el('time', '', formatDate(event.created_at, true));
@@ -1552,13 +3029,57 @@
   $('ingestion-filter').addEventListener('change', renderIngestion);
   $('ingestion-search').addEventListener('input', renderIngestion);
   $('upload-button').addEventListener('click', openUpload);
-  $('pdfdebug-back').addEventListener('click', () => {
-    const host = $('pdfdebug-content');
-    delete host.dataset.loaded;
-    $('pdfdebug-back').hidden = true;
-    host.replaceChildren();
-    location.hash = 'ingestion';
+  $('home-upload').addEventListener('click', openUpload);
+  $('home-refresh').addEventListener('click', () => busy($('home-refresh'), refreshDocuments).catch(alertError));
+  $('home-ask').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const question = $('home-question').value.trim();
+    if (!question || state.chatBusy) return;
+    $('home-question').value = '';
+    location.hash = 'ask';
+    $('chat-input').value = question;
+    submitQuestion();
   });
+  $('rail-logout').addEventListener('click', () => $('logout-button').click());
+  // Motion helpers. Everything is skipped when the system asks for reduced motion.
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  function placeIndicator(indicator, active) {
+    if (!indicator) return;
+    if (!active || !active.offsetParent) { indicator.style.opacity = '0'; return; }
+    indicator.style.height = `${active.offsetHeight}px`;
+    indicator.style.transform = `translateY(${active.offsetTop}px)`;
+    indicator.style.opacity = '1';
+    // The first placement jumps into position; later moves glide.
+    if (!indicator.classList.contains('ready')) requestAnimationFrame(() => indicator.classList.add('ready'));
+  }
+  function moveIndicators() {
+    placeIndicator($('nav-indicator'), document.querySelector('#primary-nav .nav-item.active'));
+    placeIndicator($('rail-indicator'), document.querySelector('.rail-nav .rail-btn.active'));
+  }
+  function countUp(node, value, format) {
+    node.textContent = format(value);  // final value first: correct even if frames never run (background tab)
+    if (reducedMotion.matches || value < 2 || document.hidden) return;
+    node.textContent = format(0);
+    const start = performance.now();
+    const duration = 700;
+    const step = (now) => {
+      const t = Math.min(1, (now - start) / duration);
+      node.textContent = format(Math.round(value * (1 - Math.pow(1 - t, 3))));
+      if (t < 1 && node.isConnected) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+  window.addEventListener('resize', () => requestAnimationFrame(moveIndicators));
+  // Desktop navigation: full panel, or collapsed to the icon rail. The choice is remembered per browser.
+  function setNavCollapsed(collapsed, save = true) {
+    $('workspace').classList.toggle('nav-collapsed', collapsed);
+    requestAnimationFrame(moveIndicators);
+    window.setTimeout(moveIndicators, 460);  // after the fold transition settles
+    if (save) { try { localStorage.setItem('kb.navCollapsed', collapsed ? '1' : '0'); } catch { /* storage may be blocked */ } }
+  }
+  $('nav-collapse').addEventListener('click', () => { setNavCollapsed(true); $('nav-expand').focus(); });
+  $('nav-expand').addEventListener('click', () => { setNavCollapsed(false); $('nav-collapse').focus(); });
+  try { setNavCollapsed(localStorage.getItem('kb.navCollapsed') === '1', false); } catch { /* default: expanded */ }
   $('create-folder-button').addEventListener('click', createFolder);
   $('refresh-access').addEventListener('click', () => busy($('refresh-access'), refreshFolders).catch(alertError));
   $('refresh-audit').addEventListener('click', () => busy($('refresh-audit'), refreshAudit).catch(alertError));

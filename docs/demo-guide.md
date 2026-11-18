@@ -45,6 +45,22 @@ Show `lookupemployeeaccesscontrol {}` then `requestaccess {"folder_id":"technolo
 
 Optionally ask Q048 about technology incident requirements as E003 and inspect all trace/citation folders. The invariant is no technology evidence, not a promise of a universal refusal; irrelevant retail excerpts should be acknowledged as a relevance failure.
 
+## Task 5: Knowledge graph and main entities (optional, about 2 minutes)
+
+Sign in as a folder owner or checker (for example E031 for Finance) and open **Knowledge graph**.
+
+1. **Explorer**: entities coloured by ontology type and the links between them. Choose a link to see
+   its evidence passage and page. Only approved links reach answers (MCP tool `graphfacts`).
+2. **Review queue**: proposed links waiting for a checker. Approve or reject one to show that the
+   decision is recorded in the activity log.
+3. **Main entities**: one row per document with its kind (for example market research note or
+   results release), its main entities, and how many entities the classifier confirmed or disputed.
+   Dashed red marks a main entity of a type that kind of document is not expected to be about. Open a
+   document to show every entity and the classifier's view of it. Explain that GLiNER2.5 runs on the
+   machine and that the document kinds and their expected types are a draft for departments to correct.
+4. Ask a question that names one of a document's main entities; the evidence list shows each
+   passage's entities, and tagged passages rank higher.
+
 ## Brief maker-checker walkthrough and wrap-up
 
 With time remaining, upload a synthetic file as E003, show pending status, then use E002 to approve. A maker cannot self-approve, including an owner. Show indexed status after worker processing and the audit event; do not imply a staged pre-approved document just completed the workflow live. E001/E004 can demonstrate owner/delegate access management separately; do not mutate the evaluation baseline without resetting it.

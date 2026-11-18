@@ -1,0 +1,21 @@
+# Garage for KBase inside a CML Application: loopback only, one node.
+# Copy to var/garage/config.toml (keep it private; var/ is not committed) and:
+#   1. replace the two /home/cdsw/... paths if the KBase folder is elsewhere in the project;
+#   2. replace rpc_secret with a new value from: openssl rand -hex 32
+# s3_region must match AWS_REGION in cml.env.
+
+metadata_dir = "/home/cdsw/var/cml/garage/meta"
+data_dir = "/home/cdsw/var/cml/garage/data"
+# sqlite keeps Garage's own metadata in one file; lmdb relies on memory mapping, which the project's
+# network disk does not handle well.
+db_engine = "sqlite"
+replication_factor = 1
+
+rpc_bind_addr = "127.0.0.1:3901"
+rpc_public_addr = "127.0.0.1:3901"
+rpc_secret = "REPLACE-WITH-openssl-rand-hex-32"
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "127.0.0.1:3900"
+root_domain = ".s3.garage.localhost"

@@ -24,9 +24,39 @@ def retention_cutoff() -> str:
         return today.replace(year=today.year - settings().retention_years, day=28).isoformat()
 
 
+def _elastic() -> bool:
+    return settings().search_engine == 'elasticsearch'
+
+
+def _vector_field(dimensions: int) -> dict:
+    """An approximate nearest-neighbour vector field compared by cosine, in the engine's own mapping."""
+    if _elastic():
+        return {'type': 'dense_vector', 'dims': dimensions, 'index': True, 'similarity': 'cosine'}
+    return {'type': 'knn_vector', 'dimension': dimensions,
+            'method': {'name': 'hnsw', 'engine': 'lucene', 'space_type': 'cosinesimil'}}
+
+
+def _knn_search(field: str, vector: list[float], k: int, filters: list[dict]) -> dict:
+    """The nearest-vector search body. Elasticsearch takes it beside the query (8.0 and later);
+    OpenSearch takes it as the query."""
+    body = {'size': k, '_source': {'excludes': ['vector', 'image_vector']}}
+    if _elastic():
+        body['knn'] = {'field': field, 'query_vector': vector, 'k': k, 'num_candidates': max(100, k * 10),
+                       'filter': {'bool': {'filter': filters}}}
+    else:
+        body['query'] = {'knn': {field: {'vector': vector, 'k': k, 'filter': {'bool': {'filter': filters}}}}}
+    return body
+
+
 def client():
-    from opensearchpy import OpenSearch
     cfg = settings()
+    if _elastic():
+        from elasticsearch import Elasticsearch
+        return Elasticsearch(hosts=[cfg.opensearch_url],
+                             basic_auth=(cfg.opensearch_username, cfg.opensearch_password) if cfg.opensearch_username else None,
+                             verify_certs=cfg.opensearch_verify_certs, ca_certs=cfg.opensearch_ca_certs or None,
+                             request_timeout=30, max_retries=1, retry_on_timeout=True)
+    from opensearchpy import OpenSearch
     return OpenSearch(hosts=[cfg.opensearch_url], http_auth=(cfg.opensearch_username, cfg.opensearch_password) if cfg.opensearch_username else None,
                       verify_certs=cfg.opensearch_verify_certs, ca_certs=cfg.opensearch_ca_certs or None,
                       timeout=30, max_retries=1, retry_on_timeout=True)
@@ -52,24 +82,24 @@ def index_definition() -> dict:
         'mappings': {'dynamic': False, 'properties': {
             'text': {'type': 'text'}, 'title': {'type': 'text'}, 'section': {'type': 'text'},
             'document_id': {'type': 'keyword'}, 'folder_id': {'type': 'keyword'}, 'generation_id': {'type': 'keyword'}, 'latest_date': {'type': 'date'},
-            'embedding_model': {'type': 'keyword'}, 'image_embedding_model': {'type': 'keyword'}}}}
+            'embedding_model': {'type': 'keyword'}, 'image_embedding_model': {'type': 'keyword'},
+            'entities': {'type': 'keyword'}}}}  # confirmed entity keys from the entity scan (kb/entities.py)
     if settings().opensearch_vector_search:
-        definition['settings']['index']['knn'] = True
-        definition['mappings']['properties']['vector'] = {
-            'type': 'knn_vector', 'dimension': settings().embedding_dimensions,
-            'method': {'name': 'hnsw', 'engine': 'lucene', 'space_type': 'cosinesimil'}}
+        if not _elastic():
+            definition['settings']['index']['knn'] = True
+        definition['mappings']['properties']['vector'] = _vector_field(settings().embedding_dimensions)
         definition['mappings']['_meta'] = {'text_embedding_model': _text_model()}
         if settings().image_embeddings_enabled:
-            definition['mappings']['properties']['image_vector'] = {
-                'type': 'knn_vector', 'dimension': settings().image_embedding_dimensions,
-                'method': {'name': 'hnsw', 'engine': 'lucene', 'space_type': 'cosinesimil'}}
+            definition['mappings']['properties']['image_vector'] = _vector_field(settings().image_embedding_dimensions)
             definition['mappings']['_meta']['image_embedding_model'] = settings().openrouter_image_embedding_model
     return definition
 
 
 def _text_model() -> str:
     cfg = settings()
-    return cfg.openrouter_embedding_model if cfg.embedding_backend == 'openrouter' else 'offline-hash-v1'
+    if cfg.embedding_backend == 'openrouter':
+        return cfg.openrouter_embedding_model
+    return cfg.local_embedding_model if cfg.embedding_backend == 'local' else 'offline-hash-v1'
 
 
 def _validate_vectors(mapping: dict):
@@ -82,11 +112,17 @@ def _validate_vectors(mapping: dict):
         expected.append(('image_vector', cfg.image_embedding_dimensions, 'image_embedding_model', cfg.openrouter_image_embedding_model))
     for field, dimensions, metadata_key, model in expected:
         vector = properties.get(field, {})
-        if (vector.get('type') != 'knn_vector' or vector.get('dimension') != dimensions
-                or vector.get('method', {}).get('engine') != 'lucene'
-                or vector.get('method', {}).get('name') != 'hnsw'
-                or vector.get('method', {}).get('space_type') != 'cosinesimil'
-                or mapping.get('_meta', {}).get(metadata_key) != model):
+        if _elastic():
+            # Elasticsearch fills in index_options itself (its default changed between versions), so
+            # only what decides whether stored vectors are comparable is checked.
+            wrong = (vector.get('type') != 'dense_vector' or vector.get('dims') != dimensions
+                     or vector.get('index') is False or vector.get('similarity') != 'cosine')
+        else:
+            wrong = (vector.get('type') != 'knn_vector' or vector.get('dimension') != dimensions
+                     or vector.get('method', {}).get('engine') != 'lucene'
+                     or vector.get('method', {}).get('name') != 'hnsw'
+                     or vector.get('method', {}).get('space_type') != 'cosinesimil')
+        if wrong or mapping.get('_meta', {}).get(metadata_key) != model:
             raise RuntimeError('Vector mapping/model is incompatible; create a fresh index for the configured text/image models.')
 
 
@@ -128,11 +164,17 @@ def _visual_vector(chunk: dict, cache: dict) -> list[float] | None:
 
 @traced('ingestion.index')
 def index_chunks(chunks: list[dict]):
+    if settings().search_backend == 'sqlite' and settings().local_ingestion_enabled:
+        return  # offline demo: the Chunk rows written at publication are the SQLite search index
     if settings().search_backend != 'opensearch':
         raise ValueError('Hybrid indexing requires OpenSearch.')
-    from opensearchpy.helpers import bulk
+    if _elastic():
+        from elasticsearch.helpers import bulk
+    else:
+        from opensearchpy.helpers import bulk
     cfg = settings()
-    if not cfg.opensearch_vector_search or cfg.embedding_backend != 'openrouter' or not cfg.external_models_enabled:
+    local_hybrid = cfg.local_ingestion_enabled and cfg.embedding_backend == 'local'  # nothing leaves the machine
+    if not cfg.opensearch_vector_search or not (local_hybrid or (cfg.embedding_backend == 'openrouter' and cfg.external_models_enabled)):
         raise ValueError('Hybrid indexing with real embeddings is mandatory; BM25-only index writes are disabled.')
     ensure_index()
     visual_cache = {}
@@ -155,6 +197,40 @@ def index_chunks(chunks: list[dict]):
     client().indices.refresh(index=cfg.opensearch_index)
 
 
+ENTITY_BOOST = 2.0  # BM25 boost for chunks tagged with an entity the question names
+
+
+def write_entity_tags(db, tags: dict[str, dict[str, list[str]]]) -> int:
+    """Set the `entities` field of indexed chunks ({document id: {chunk id: keys}}). Adds the field to
+    an index made before it existed. Chunks missing from the index (archived) are skipped. Returns the
+    number of chunks that could not be updated."""
+    if settings().search_backend != 'opensearch':
+        return 0
+    if _elastic():
+        from elasticsearch.helpers import bulk
+    else:
+        from opensearchpy.helpers import bulk
+    search = client()
+    actions, indexes = [], set()
+    for document_id, by_chunk in tags.items():
+        document = db.get(Document, document_id)
+        if document is None:
+            continue
+        index = index_for_document(db, document)
+        indexes.add(index)
+        actions.extend({'_op_type': 'update', '_index': index, '_id': chunk_id, 'doc': {'entities': keys}}
+                       for chunk_id, keys in by_chunk.items())
+    for index in indexes:
+        if search.indices.exists(index=index):
+            search.indices.put_mapping(index=index, body={'properties': {'entities': {'type': 'keyword'}}})
+    if not actions:
+        return 0
+    _, errors = bulk(search, actions, raise_on_error=False, raise_on_exception=False, chunk_size=500)
+    for index in indexes:
+        search.indices.refresh(index=index)
+    return len(errors) if isinstance(errors, list) else int(errors or 0)
+
+
 def remove_document(document_id: str):
     if settings().search_backend == 'opensearch':
         client().delete_by_query(index=settings().opensearch_index, body={'query': {'term': {'document_id': document_id}}}, refresh=True)
@@ -162,7 +238,9 @@ def remove_document(document_id: str):
 
 def chunk_manifest(payload: dict) -> dict:
     """Keep SQL lineage/integrity metadata, not a second searchable content copy."""
-    if settings().search_backend == 'sqlite':
+    # The local profiles keep the text in SQL as well: the graph build reads it, and the demo can
+    # switch between SQLite search and local hybrid search without reprocessing documents.
+    if settings().search_backend == 'sqlite' or settings().local_ingestion_enabled:
         return payload
     return {key: value for key, value in payload.items() if key != 'text'} | {
         'text_sha256': hashlib.sha256(payload['text'].encode()).hexdigest()}
@@ -183,6 +261,10 @@ def search_documents(db, employee_id: str, query: str, top_k: int = 5) -> list[d
     folders = permitted_folders(db, employee_id)
     if not folders:
         return []
+    from kb.entities import chunk_entities, named_in
+    named = named_in(db, folders, query)  # confirmed entities the question names, from the entity scan
+    if named:
+        event('retrieval.entities', matched=len(named))
     # Current SQL grants drive prefilters; candidates are rechecked below.
     # Generation terms suit this prototype; large deployments need a scalable
     # publication/read model rather than an unbounded terms filter.
@@ -200,23 +282,23 @@ def search_documents(db, employee_id: str, query: str, top_k: int = 5) -> list[d
         filters.append({'bool': {'should': published, 'minimum_should_match': 1}})
         lexical = {'size': top_k * 4, '_source': {'excludes': ['vector', 'image_vector']}, 'query': {'bool': {'filter': filters,
                     'must': [{'multi_match': {'query': query, 'fields': ['text', 'title^2', 'section^1.5']}}]}}}
+        if named:  # raises the rank of matching chunks tagged with a named entity; adds no new matches
+            lexical['query']['bool']['should'] = [{'terms': {'entities': sorted(named), 'boost': ENTITY_BOOST}}]
         lexical_indexes = ','.join(filter(None, [cfg.opensearch_index, cfg.opensearch_bm25_fallback_index]))
         queries = [(lexical_indexes, lexical)]
         if cfg.opensearch_vector_search:
             with measure('opensearch_mapping'):
                 _validate_vectors(client().indices.get_mapping(index=cfg.opensearch_index)[cfg.opensearch_index]['mappings'])
-            vector = embeddings([query])[0]
+            vector = embeddings([query], 'query')[0]
             text_filters = filters + [{'term': {'embedding_model': _text_model()}}]
-            queries.append((cfg.opensearch_index, {'size': top_k * 4, '_source': {'excludes': ['vector', 'image_vector']}, 'query': {'knn': {'vector': {
-                        'vector': vector, 'k': top_k * 4, 'filter': {'bool': {'filter': text_filters}}}}}}))
+            queries.append((cfg.opensearch_index, _knn_search('vector', vector, top_k * 4, text_filters)))
             if cfg.image_embeddings_enabled:
                 visual_query = image_query_embedding(query)
                 image_filters = filters + [{'term': {'image_embedding_model': cfg.openrouter_image_embedding_model}}]
-                queries.append((cfg.opensearch_index, {'size': top_k * 4, '_source': {'excludes': ['vector', 'image_vector']}, 'query': {'knn': {'image_vector': {
-                            'vector': visual_query, 'k': top_k * 4, 'filter': {'bool': {'filter': image_filters}}}}}}))
+                queries.append((cfg.opensearch_index, _knn_search('image_vector', visual_query, top_k * 4, image_filters)))
         ranked = {}
         for index, body in queries:
-            mode = 'knn' if 'knn' in body['query'] else 'bm25'
+            mode = 'knn' if 'knn' in body or 'knn' in body.get('query', {}) else 'bm25'
             with operation('opensearch.' + mode, retrieval_mode=mode):
                 with measure('opensearch_' + mode):
                     search_result = client().search(index=index, body=body)
@@ -231,12 +313,18 @@ def search_documents(db, employee_id: str, query: str, top_k: int = 5) -> list[d
         # Explicit small-corpus demo lexical retrieval; not advertised as semantic or scalable.
         terms = set(re.findall(r'\w+', query.lower())) - {'the', 'is', 'a', 'an', 'what', 'how', 'are', 'my', 'can', 'of', 'and', 'to', 'for', 'in'}
         ranked = []
+        tagged = set()
+        if named:
+            from kb.db import EntityMention
+            tagged = set(db.scalars(select(EntityMention.chunk_id).where(EntityMention.key.in_(named), EntityMention.folder_id.in_(folders),
+                                                                          EntityMention.type_check == 'confirmed')))
         eligible = select(Chunk).join(Document, Document.id == Chunk.document_id).where(Chunk.folder_id.in_(folders), Document.status == 'indexed', Document.latest_date >= retention_cutoff())
         for chunk in db.scalars(eligible):
             words = re.findall(r'\w+', chunk.text.lower())
             matches = sum(1 + math.log1p(words.count(term)) for term in terms if term in words)
             if matches:
-                ranked.append((matches / (1 + len(words) / 500), chunk.payload))
+                boost = 1.5 if chunk.id in tagged else 1.0  # tagged with an entity the question names
+                ranked.append((boost * matches / (1 + len(words) / 500), chunk.payload))
         candidates = [payload for _, payload in sorted(ranked, key=lambda item: item[0], reverse=True)]
     results = []
     for chunk in candidates:
@@ -250,6 +338,9 @@ def search_documents(db, employee_id: str, query: str, top_k: int = 5) -> list[d
                 results.append({**payload, 'title': document.title, 'latest_date': document.latest_date})
         if len(results) == top_k:
             break
+    tags = chunk_entities(db, [r['id'] for r in results])
+    for result in results:  # what each passage is about, from the entity scan; empty before a scan
+        result['entities'] = tags.get(result['id'], [])
     return results
 
 
@@ -262,9 +353,13 @@ def get_section(db, employee_id: str, chunk_id: str) -> dict | None:
     if not doc or doc.status != 'indexed' or doc.latest_date < retention_cutoff():
         return None
     if settings().search_backend == 'opensearch':
-        from opensearchpy import NotFoundError
+        if _elastic():
+            from elasticsearch import NotFoundError
+        else:
+            from opensearchpy import NotFoundError
         try:
-            indexed = client().get(index=index_for_document(db, doc), id=chunk_id, _source_excludes='vector,image_vector')['_source']
+            excludes = {'source_excludes' if _elastic() else '_source_excludes': 'vector,image_vector'}
+            indexed = client().get(index=index_for_document(db, doc), id=chunk_id, **excludes)['_source']
         except NotFoundError:
             return None
         payload = verified_payload(chunk, indexed)

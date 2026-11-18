@@ -68,6 +68,27 @@ Reindex reads the **current published curated generation**, not original PDFs. I
 - Stop all workers before `recover --folder FOLDER --document-id ID`. Recovery is exact-ID and fails interrupted work for fresh review; it never requeues approval automatically.
 - Errors omit source text and raw third-party bodies. Use request status, library and audit log, not just process exit, to confirm success.
 
+## Processing time limits
+
+Two kinds of limit apply to each processing attempt (added 2026-11-16 to 2026-11-18):
+
+- **One hour of wall time per attempt** (`kb/processing_timeout.py`). The queue runs each approved
+  request in its own worker process (`python -m kb.pipeline <request_id>`), measured from the
+  request's durable `ingestion.claimed` audit event. Past an hour the worker is stopped (with its
+  child processes, such as the Docling worker; Windows uses `taskkill /T`) and the request fails as
+  `processing_timeout` at the stage it reached. A reprocess that times out keeps the previous
+  indexed generation searchable. Requests left `processing` by a crash are expired the next time
+  the queue runs.
+- **Step limits** on the **Processing settings** page (`kb/processing_limits.py`):
+  `DOCLING_TIMEOUT_SECONDS`, `OCR_TIMEOUT_SECONDS`, `DOC_CONVERSION_TIMEOUT_SECONDS`,
+  `GRANITE_SECONDS_PER_CHART`, `GRANITE_SUMMARY_SECONDS`, `GRAPH_EXTRACTION_SECONDS` and
+  `GRAPH_ALIGNMENT_SECONDS`. Everyone can see them; only employees listed in `KB_DEVELOPERS` can
+  change them. Saved values apply from the next run that starts, and each run records the limits it used.
+
+Model errors also fail fast: an exhausted token quota fails at once as `model_quota_exhausted`
+instead of using up retries, and a vision answer with malformed JSON gets one corrected retry
+before failing as `invalid_vision_output`.
+
 Real OpenRouter transfer remains blocked pending direct review outside Auto permission mode. Local S3 persistence is live, but real pilot enrichment and hybrid corpus activation have not occurred. See [current gaps](current-gaps.md).
 
 ## Diagnosing failures after approval (2026-10-27)

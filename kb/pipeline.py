@@ -13,6 +13,7 @@ from kb.config import settings
 from kb.db import Chunk, Document, Folder, IndexedGeneration, ProcessingRequest, ProcessingProgress, ReplacementCleanup, audit, db_session, now
 from kb.governance import GovernanceError, digest_json, lock_document, processing_scope, validate_approval, require_hybrid_ingestion
 from kb.parsers import MissingDependency, ParseError, ParserLimitError, chunk_document, parse_document
+from kb.processing_limits import load_limits, using_limits
 from kb.processing_context import bound_processing_transfers
 from kb.providers import InvalidVisionOutput, ModelQuotaError, ModelUnavailable, start_diagnostics
 from kb.processing_timeout import LIMIT, expire_overdue, fail_timeout, latest_claim, remaining_seconds
@@ -127,7 +128,9 @@ def process_request(request_id: str) -> bool:
             store.put_file(raw_key, source)
             stage = 'parsing'
             report_progress(stage)
-            parsed = parse_document(source, work / 'assets')
+            # Time limits saved on the Processing settings page apply from the next run that starts.
+            with using_limits(load_limits()):
+                parsed = parse_document(source, work / 'assets')
             _check_running(request_id)
             if source.suffix == '.pdf':
                 parsed = order_pdf_blocks(parsed)
@@ -213,7 +216,7 @@ def process_request(request_id: str) -> bool:
                 if not archived:
                     for payload in payloads:
                         db.add(Chunk(id=payload['id'], document_id=document_id, folder_id=info['folder_id'],
-                                     text=payload['text'] if cfg.search_backend == 'sqlite' else '',
+                                     text=payload['text'] if cfg.search_backend == 'sqlite' or cfg.local_ingestion_enabled else '',
                                      section=payload['section'], page=payload.get('page'), payload=chunk_manifest(payload)))
                 generation = db.get(IndexedGeneration, document_id)
                 if not generation:
@@ -283,7 +286,7 @@ def process_next() -> bool:
     from kb.replacement import cleanup_replacement
     expire_overdue()
     cleanup_replacement()
-    if not settings().opensearch_vector_search or not settings().external_models_enabled:
+    if not settings().local_ingestion_enabled and (not settings().opensearch_vector_search or not settings().external_models_enabled):
         return False
     with db_session() as db:
         request_id = db.scalar(select(ProcessingRequest.id).where(ProcessingRequest.status == 'approved',
@@ -312,10 +315,28 @@ def archive_expired() -> int:
             audit(db, 'retention', 'document.archived', document.id)
         return sum(document.status == 'archived' for document in documents)
 
+def _worker_options() -> dict:
+    """Start the worker in its own process group, so a stuck one can be stopped with what it started."""
+    if os.name == 'nt':
+        return {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {'start_new_session': True}
+
+
+def _stop_worker(worker) -> None:
+    if os.name == 'nt':
+        # Windows has no process groups to signal (os.killpg does not exist there): taskkill /T ends
+        # the worker and the processes it started, such as the local Docling worker.
+        subprocess.run(['taskkill', '/PID', str(worker.pid), '/T', '/F'], capture_output=True, check=False)
+        return
+    try:
+        os.killpg(worker.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
 def run_supervised(request_id):
     """Keep a blocked parser or provider call from occupying the queue indefinitely."""
-    with subprocess.Popen([sys.executable, '-m', 'kb.pipeline', request_id],
-                          start_new_session=True) as worker:
+    with subprocess.Popen([sys.executable, '-m', 'kb.pipeline', request_id], **_worker_options()) as worker:
         deadline = time.monotonic() + LIMIT.total_seconds()
         started = None
         try:
@@ -341,10 +362,7 @@ def run_supervised(request_id):
                     expire_overdue(exclude=request_id)
         finally:
             if worker.poll() is None:
-                try:
-                    os.killpg(worker.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                _stop_worker(worker)
                 worker.wait()
     expire_overdue()
     with db_session() as db:

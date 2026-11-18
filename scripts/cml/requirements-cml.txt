@@ -1,0 +1,18 @@
+# Parsing and GLiNER libraries for KBase on CML, at the versions tested locally on 2026-11-18.
+# Installed with the KBase requirements by scripts/cml/install.py into the runtime's Python (3.11 or 3.12).
+# If the internal mirror lacks one of these exact versions, the nearest later release should work;
+# record what was used.
+docling==2.148.0
+docling-core==2.106.0
+docling-ibm-models==4.0.4
+gliner2==2.1.0
+# PyPI's Linux torch wheel also runs on CPU. On a GPU runtime it must match the runtime's CUDA.
+torch==2.15.0
+torchvision==0.29.2
+transformers==5.22.1
+accelerate==1.15.0
+huggingface_hub==1.33.0
+rapidocr==3.10.0
+opencv-python-headless==5.0.0.93
+pypdfium2==5.14.0
+numpy==2.5.4

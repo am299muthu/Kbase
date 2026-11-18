@@ -71,4 +71,34 @@ The intended scope is the currently approved **10 documents / 107 chunks**, not 
 
 Require zero reindex errors, expected chunk counts, correct vector/model metadata, and authorized/unauthorized retrieval validation before updating `.env` to the flags above. Keep `ALLOW_UNMASKED_EXTERNAL=false`. If validation fails, leave the original BM25 profile active and report the failure; do not delete either index or bypass the approval boundary.
 
+## One endpoint per model
+
+Added 2026-11-18. OpenRouter is no longer the only destination: each model KBase calls over an API
+can have its own OpenAI-compatible endpoint, for an internal model server or one link per model.
+GLiNER and the Docling parsing models are not API models; they run locally.
+
+| Model | Link | Key | Model name |
+|---|---|---|---|
+| Answers | `ANSWER_MODEL_URL` | `ANSWER_MODEL_KEY` | `ANSWER_MODEL` (or `OPENROUTER_MODEL`) |
+| Question planner | `PLANNER_MODEL_URL` | `PLANNER_MODEL_KEY` | `PLANNER_MODEL` |
+| Grounding guardrail | `GUARDRAIL_MODEL_URL` | `GUARDRAIL_MODEL_KEY` | `GUARDRAIL_MODEL` (or `OPENROUTER_GUARDRAIL_MODEL`) |
+| Charts and scans | `VISION_MODEL_URL` | `VISION_MODEL_KEY` | `VISION_MODEL`, `VISION_FALLBACK_MODEL` |
+| Search vectors | `EMBEDDING_MODEL_URL` | `EMBEDDING_MODEL_KEY` | `EMBEDDING_MODEL` (or `OPENROUTER_EMBEDDING_MODEL`) |
+| Image vectors | `IMAGE_EMBEDDING_MODEL_URL` | `IMAGE_EMBEDDING_MODEL_KEY` | `IMAGE_EMBEDDING_MODEL` |
+
+- A link is a base URL (`https://host/model/v1`) or the full `/chat/completions` or `/embeddings`
+  URL, HTTPS only. A blank link uses `OPENROUTER_BASE_URL` and its paths; a blank key uses
+  `OPENROUTER_API_KEY`. The planner and the guardrail fall back to the answer model's link and key.
+- `MODEL_API=openai` sends plain OpenAI-compatible requests: no OpenRouter `provider` routing or
+  price ceilings, no `reasoning` field, models tried in the order listed (no ':free'-first ordering),
+  and a key may be blank if the server needs none. `MODEL_API=openrouter` (the default) keeps the
+  behaviour above unchanged.
+- `LLM_PROVIDER=api` and `EMBEDDING_BACKEND=api` are plain names for the model-API adapter (the
+  code and approval scopes still call it `openrouter`).
+- Endpoint links join the approval scope when set (keys never do), so changing where content is sent
+  needs a fresh checker approval. Existing scopes do not change while the links are blank.
+- Diagnostics redact every configured model key.
+
+The CML profile uses this with the bank's endpoints: [scripts/cml](../scripts/cml/README.md).
+
 Only after validation, stop the existing app process, update the private environment and restart one app instance. Verify live `/health` reports hybrid retrieval/embeddings and OpenRouter inference, then exercise cited synthetic-policy HTTP/MCP chat. Preserve the original index for rollback; rollback consists of restoring the original provider/index flags and restarting the app, not deleting data.

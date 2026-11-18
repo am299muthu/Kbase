@@ -40,6 +40,10 @@ async def lifespan(app):
     from kb.telemetry import configure
     configure()
     init_db()
+    from kb.graph_build import recover_interrupted
+    recover_interrupted()  # a graph build cut off by a restart is marked failed, not left running
+    from kb.entities import recover_interrupted as recover_scans
+    recover_scans()  # the same for an entity scan
     await asyncio.to_thread(ObjectStore().ensure_bucket)
     maintenance = os.environ.get('KB_MAINTENANCE') == '1'
     if settings().opensearch_vector_search and not maintenance:
@@ -50,6 +54,11 @@ async def lifespan(app):
                 raise RuntimeError('Hybrid startup blocked: ' + '; '.join(report['blocking']))
             # Explicit operator choice (serve --partial-corpus): keep search available while re-indexing continues.
             logging.getLogger('uvicorn.error').warning('Serving a PARTIAL corpus: %s', '; '.join(report['blocking']))
+    local_embedding = settings().embedding_backend == 'local' and not maintenance
+    if local_embedding:
+        # Load the embedding model once now; each question's helper process then reuses it.
+        from kb import local_embeddings
+        await asyncio.to_thread(local_embeddings.warm)
     async def worker():
         while True:
             try:
@@ -58,12 +67,20 @@ async def lifespan(app):
                     await asyncio.sleep(2)
             except Exception:
                 await asyncio.sleep(5)
-    task = asyncio.create_task(worker()) if not maintenance else None
+    # Parallel ingestion workers. Each claims a request under the document lock, so two workers never
+    # parse the same document. Local Docling + Granite needs about 4 GB of GPU memory per worker.
+    try:
+        worker_count = max(1, min(8, int(os.environ.get('INGEST_WORKERS', '1'))))
+    except ValueError:
+        worker_count = 1
+    tasks = [asyncio.create_task(worker()) for _ in range(worker_count)] if not maintenance else []
     yield
-    if task:
+    for task in tasks:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
+    if local_embedding:
+        local_embeddings.stop()
 
 
 app = FastAPI(title=settings().app_name, lifespan=lifespan)
@@ -337,17 +354,18 @@ def upload_document(file: UploadFile = File(...), folder_id: str = Form(...), la
     doc_id = secrets.token_hex(16)
     versions = db.scalars(select(Document).where(Document.folder_id == folder_id))
     version = max((doc.version for doc in versions if filename_key(doc.title) == filename_key(title)), default=0) + 1
-    with tempfile.NamedTemporaryFile(dir=settings().data_dir, suffix=Path(title).suffix) as temp:
+    # A closed file inside a temporary folder: Windows cannot reopen a NamedTemporaryFile while it is open.
+    with tempfile.TemporaryDirectory(dir=settings().data_dir) as temp_dir:
+        source = Path(temp_dir) / ('upload' + Path(title).suffix)
         total = 0
-        while part := file.file.read(1024 * 1024):
-            total += len(part)
-            if total > settings().max_upload_mb * 1024 * 1024:
-                raise HTTPException(413, 'File exceeds MAX_UPLOAD_MB.')
-            temp.write(part)
+        with source.open('wb') as temp:
+            while part := file.file.read(1024 * 1024):
+                total += len(part)
+                if total > settings().max_upload_mb * 1024 * 1024:
+                    raise HTTPException(413, 'File exceeds MAX_UPLOAD_MB.')
+                temp.write(part)
         if not total:
             raise HTTPException(422, 'Empty files cannot be onboarded.')
-        temp.flush()
-        source = Path(temp.name)
         digest = file_digest(source)
         key = f'staging/{folder.id}/{doc_id}/original{Path(title).suffix.lower()}'
         ObjectStore().put_file(key, source)
@@ -532,6 +550,32 @@ def annotated_pdf(request_id: str, layer: str = 'all', user=Depends(user_context
     return Response(content, media_type='application/pdf', headers={
         'Content-Disposition': f'attachment; filename="pdf-layout-{request.id}-{layer}.pdf"',
         'Cache-Control': 'no-store'})
+
+
+@app.get('/api/processing-requests/{request_id}/pdf-layout/data')
+def pdf_extracted_data(request_id: str, user=Depends(user_context), db=Depends(connection)):
+    """Tables and chart data extracted in this run, for the object inspector. Same roles as the
+    page images; read from the run's parsed record, no model call."""
+    pdf_layout(request_id, user, db)
+    request = db.get(ProcessingRequest, request_id)
+    document = db.get(Document, request.document_id)
+    from botocore.exceptions import ClientError
+    from kb.pdf_debug import extracted_data
+    items = []
+    try:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'parsed.json'
+            ObjectStore().fetch(f'raw-parsed/{document.id}/{request.id}/content.json', path)
+            items = extracted_data(json.loads(path.read_text(encoding='utf-8')))
+    except FileNotFoundError:
+        pass
+    except ClientError as exc:
+        if str(exc.response.get('Error', {}).get('Code')) not in {'NoSuchKey', '404', 'NotFound'}:
+            raise
+    entitled(db, user.id, document.folder_id, {'maker', 'checker', 'owner', 'delegate'})
+    db.refresh(user)
+    audit(db, user.id, 'ingestion.pdf_debug_data', document.id, {'request_id': request.id, 'items': len(items)})
+    return {'request_id': request.id, 'items': items}
 
 
 @app.get('/api/processing-requests/{request_id}/pdf-layout/page/{page_number}')
@@ -730,6 +774,233 @@ def audit_events(user=Depends(user_context), db=Depends(connection)):
                         'target_id': item.target_id, 'details': item.details} for item in rows]}
 
 
+# ---------------------------------------------------------------- knowledge graph
+# Anyone with a grant on a folder can see its graph. Folder owners and checkers can build it and
+# review its links (the same people who approve documents). Only approved links reach answers.
+GRAPH_EDIT_ROLES = {'owner', 'checker'}
+
+
+class GraphBuildBody(BaseModel):
+    folder_id: str = Field(min_length=1, max_length=64)
+    document_ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class GraphReviewBody(BaseModel):
+    decision: str
+    note: str = Field(default='', max_length=500)
+
+
+class GraphBulkReviewBody(BaseModel):
+    folder_id: str = Field(min_length=1, max_length=64)
+    link_ids: list[str] = Field(min_length=1, max_length=2000)
+    decision: str
+    note: str = Field(default='', max_length=500)
+
+
+class GraphNodeBody(BaseModel):
+    node_type: str = Field(min_length=1, max_length=40)
+
+
+def _graph_folder(db, user, folder_id: str, edit: bool = False) -> set:
+    if folder_id not in permitted_folders(db, user.id):
+        raise HTTPException(404, 'Folder not found.')
+    roles = folder_roles(db, user.id, folder_id)
+    if edit and not roles & GRAPH_EDIT_ROLES:
+        raise HTTPException(403, 'Only the folder owner or a checker can change its knowledge graph.')
+    return roles
+
+
+def _link_json(link, nodes) -> dict:
+    return {'id': link.id, 'source': link.source_id, 'target': link.target_id, 'predicate': link.predicate,
+            'relation': link.relation, 'confidence': link.confidence, 'score': link.score, 'status': link.status,
+            'reviewed_by': link.reviewed_by, 'reviewed_at': link.reviewed_at, 'review_note': link.review_note,
+            'source_label': nodes[link.source_id].label if link.source_id in nodes else link.source_id,
+            'target_label': nodes[link.target_id].label if link.target_id in nodes else link.target_id}
+
+
+def _apply_review(link, decision: str, user_id: str, note: str) -> None:
+    if decision not in {'approve', 'reject', 'reopen'}:
+        raise HTTPException(422, 'Decision must be approve, reject or reopen.')
+    from kb.db import now
+    link.status = {'approve': 'approved', 'reject': 'rejected', 'reopen': 'proposed'}[decision]
+    link.reviewed_by, link.reviewed_at, link.review_note = (user_id, now(), note) if decision != 'reopen' else ('', '', '')
+
+
+@app.get('/api/graph/ontology')
+def graph_ontology(user=Depends(user_context)):
+    from kb.ontology import node_types, predicates, version
+    return {'version': version(), 'types': node_types(), 'predicates': predicates()}
+
+
+@app.get('/api/graph')
+def graph_view(folder_id: str, user=Depends(user_context), db=Depends(connection)):
+    from kb.db import Chunk, GraphBuild, GraphEvidence, GraphLink, GraphNode
+    from kb.graph_build import LARGE_DOCUMENT_CHUNKS
+    roles = _graph_folder(db, user, folder_id)
+    nodes = {n.id: n for n in db.scalars(select(GraphNode).where(GraphNode.folder_id == folder_id))}
+    links = list(db.scalars(select(GraphLink).where(GraphLink.folder_id == folder_id)))
+    evidence_counts = dict(db.execute(select(GraphEvidence.link_id, func.count()).where(
+        GraphEvidence.link_id.in_([l.id for l in links])).group_by(GraphEvidence.link_id)).all())
+    builds = db.scalars(select(GraphBuild).where(GraphBuild.folder_id == folder_id).order_by(GraphBuild.created_at.desc()).limit(5))
+    can_edit = bool(roles & GRAPH_EDIT_ROLES)
+    documents = []
+    if can_edit:
+        counts = dict(db.execute(select(Chunk.document_id, func.count()).where(Chunk.folder_id == folder_id).group_by(Chunk.document_id)).all())
+        for document in db.scalars(select(Document).where(Document.folder_id == folder_id, Document.status == 'indexed').order_by(Document.title)):
+            chunks = counts.get(document.id, 0)
+            documents.append({'id': document.id, 'title': document.title, 'version': document.version, 'chunks': chunks,
+                              'large': chunks > LARGE_DOCUMENT_CHUNKS})
+    return {
+        'folder_id': folder_id, 'can_build': can_edit, 'can_review': can_edit, 'documents': documents,
+        'nodes': [{'id': n.id, 'label': n.label, 'type': n.node_type, 'type_source': n.type_source,
+                   'documents': n.document_ids} for n in nodes.values()],
+        'links': [{**_link_json(l, nodes), 'evidence': evidence_counts.get(l.id, 0)} for l in links],
+        'builds': [{'id': b.id, 'status': b.status, 'stage': b.stage, 'started_by': b.started_by, 'created_at': b.created_at,
+                    'finished_at': b.finished_at, 'backend': b.backend, 'ontology_version': b.ontology_version,
+                    'documents': len(b.document_ids or []), 'counts': b.counts, 'error': b.error} for b in builds],
+    }
+
+
+@app.get('/api/graph/links/{link_id}')
+def graph_link(link_id: str, user=Depends(user_context), db=Depends(connection)):
+    from kb.db import GraphEvidence, GraphLink, GraphNode
+    link = db.get(GraphLink, link_id)
+    if link is None:
+        raise HTTPException(404, 'Link not found.')
+    _graph_folder(db, user, link.folder_id)
+    nodes = {n.id: n for n in (db.get(GraphNode, link.source_id), db.get(GraphNode, link.target_id)) if n}
+    titles = {d.id: d.title for d in db.scalars(select(Document).where(Document.folder_id == link.folder_id))}
+    evidence = [{'document_id': e.document_id, 'title': titles.get(e.document_id, e.document_id), 'chunk_id': e.chunk_id,
+                 'page': e.page, 'quote': e.quote}
+                for e in db.scalars(select(GraphEvidence).where(GraphEvidence.link_id == link.id))]
+    return {'link': _link_json(link, nodes), 'evidence': evidence}
+
+
+@app.post('/api/graph/links/{link_id}/review')
+def graph_review(link_id: str, body: GraphReviewBody, user=Depends(user_context), db=Depends(connection)):
+    from kb.db import GraphLink
+    link = db.get(GraphLink, link_id)
+    if link is None:
+        raise HTTPException(404, 'Link not found.')
+    _graph_folder(db, user, link.folder_id, edit=True)
+    _apply_review(link, body.decision, user.id, body.note)
+    audit(db, user.id, f'graph.link_{body.decision}', link.folder_id, {'link_id': link.id, 'predicate': link.predicate, 'note': body.note})
+    return {'id': link.id, 'status': link.status}
+
+
+@app.post('/api/graph/review')
+def graph_bulk_review(body: GraphBulkReviewBody, user=Depends(user_context), db=Depends(connection)):
+    from kb.db import GraphLink
+    _graph_folder(db, user, body.folder_id, edit=True)
+    links = list(db.scalars(select(GraphLink).where(GraphLink.folder_id == body.folder_id, GraphLink.id.in_(body.link_ids))))
+    for link in links:
+        _apply_review(link, body.decision, user.id, body.note)
+    audit(db, user.id, f'graph.links_{body.decision}', body.folder_id, {'count': len(links), 'note': body.note})
+    return {'changed': len(links)}
+
+
+@app.patch('/api/graph/nodes/{node_id}')
+def graph_node_type(node_id: str, body: GraphNodeBody, user=Depends(user_context), db=Depends(connection)):
+    from kb.db import GraphNode
+    from kb.ontology import node_types
+    node = db.get(GraphNode, node_id)
+    if node is None:
+        raise HTTPException(404, 'Node not found.')
+    _graph_folder(db, user, node.folder_id, edit=True)
+    if body.node_type not in node_types():
+        raise HTTPException(422, 'Choose a type from the ontology.')
+    before = node.node_type
+    node.node_type, node.type_source = body.node_type, 'human'
+    audit(db, user.id, 'graph.node_retyped', node.folder_id, {'node_id': node.id, 'before': before, 'after': body.node_type})
+    return {'id': node.id, 'type': node.node_type}
+
+
+@app.post('/api/graph/builds')
+def graph_start_build(body: GraphBuildBody, user=Depends(user_context), db=Depends(connection)):
+    from kb.graph_build import BuildError, launch, start_build
+    _graph_folder(db, user, body.folder_id, edit=True)
+    try:
+        build = start_build(db, body.folder_id, body.document_ids, user.id)
+    except BuildError as exc:
+        raise HTTPException(409, str(exc))
+    audit(db, user.id, 'graph.build_started', body.folder_id, {'build_id': build.id, 'documents': len(body.document_ids), 'backend': build.backend})
+    db.commit()
+    launch(build.id)
+    return {'id': build.id, 'status': build.status}
+
+
+@app.get('/api/graph/builds/{build_id}')
+def graph_build_status(build_id: str, user=Depends(user_context), db=Depends(connection)):
+    from kb.db import GraphBuild
+    build = db.get(GraphBuild, build_id)
+    if build is None:
+        raise HTTPException(404, 'Build not found.')
+    _graph_folder(db, user, build.folder_id)
+    return {'id': build.id, 'status': build.status, 'stage': build.stage, 'counts': build.counts, 'error': build.error,
+            'finished_at': build.finished_at}
+
+
+class EntityScanBody(BaseModel):
+    folder_id: str
+
+
+@app.get('/api/entities')
+def entities_view(folder_id: str, user=Depends(user_context), db=Depends(connection)):
+    """Each indexed document's kind and main entities from the latest entity scan (kb/entities.py)."""
+    from kb.entities import folder_view
+    roles = _graph_folder(db, user, folder_id)
+    return {**folder_view(db, folder_id), 'can_scan': bool(roles & GRAPH_EDIT_ROLES)}
+
+
+@app.get('/api/entities/documents/{document_id}')
+def entities_document(document_id: str, user=Depends(user_context), db=Depends(connection)):
+    from kb.entities import document_view
+    document = db.get(Document, document_id)
+    if document is None:
+        raise HTTPException(404, 'Document not found.')
+    _graph_folder(db, user, document.folder_id)
+    return {**document_view(db, document_id), 'title': document.title}
+
+
+@app.post('/api/entities/scans')
+def entities_start_scan(body: EntityScanBody, user=Depends(user_context), db=Depends(connection)):
+    from kb.entities import ScanError, launch, start_scan
+    _graph_folder(db, user, body.folder_id, edit=True)
+    try:
+        scan = start_scan(db, body.folder_id, user.id)
+    except ScanError as exc:
+        raise HTTPException(409, str(exc))
+    audit(db, user.id, 'entities.scan_started', body.folder_id, {'scan_id': scan.id, 'documents': len(scan.document_ids)})
+    db.commit()
+    launch(scan.id)
+    return {'id': scan.id, 'status': scan.status}
+
+
+class LimitsBody(BaseModel):
+    values: dict[str, int | None]
+
+
+@app.get('/api/settings/processing-limits')
+def get_processing_limits(user=Depends(user_context), db=Depends(connection)):
+    """Every signed-in employee can see the limits; only developers (KB_DEVELOPERS) can change them."""
+    from kb.processing_limits import describe, is_developer
+    return {'limits': describe(db), 'can_edit': is_developer(user.id)}
+
+
+@app.put('/api/settings/processing-limits')
+def put_processing_limits(body: LimitsBody, user=Depends(user_context), db=Depends(connection)):
+    from kb.processing_limits import describe, is_developer, save
+    if not is_developer(user.id):
+        raise HTTPException(403, 'Only developers can change processing time limits.')
+    try:
+        changes = save(db, body.values, user.id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    if changes:
+        audit(db, user.id, 'settings.processing_limits', 'processing-limits', {'changes': changes})
+    return {'limits': describe(db), 'can_edit': True, 'changed': len(changes)}
+
+
 @app.post('/chat')
 async def chat(body: ChatBody, request: Request, user=Depends(user_context)):
     if os.environ.get('KB_MAINTENANCE') == '1':
@@ -755,7 +1026,7 @@ async def health():
     try:
         if settings().search_backend == 'opensearch':
             status = await asyncio.to_thread(lambda: search_client().cluster.health()['status'])
-            services['search'] = {'status': 'ok' if status in {'green', 'yellow'} else 'unavailable', 'cluster': status, 'backend': 'opensearch',
+            services['search'] = {'status': 'ok' if status in {'green', 'yellow'} else 'unavailable', 'cluster': status, 'backend': settings().search_engine,
                                   'index': settings().opensearch_index, 'retrieval': 'hybrid' if settings().opensearch_vector_search else 'bm25',
                                   'ingestion_policy': 'hybrid_required',
                                   'bm25_fallback_index': settings().opensearch_bm25_fallback_index,

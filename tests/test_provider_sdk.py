@@ -113,7 +113,9 @@ class VisionRepairTests(unittest.TestCase):
             return {'choices': [{'finish_reason':'stop', 'message':{'content':json.dumps(content)}}]}
         invalid = result({'description':'table','visible_text':{'cell':'100'}})
         valid = result({'description':'table','visible_text':['FY25 | 100'],'uncertainties':[]})
+        # model_chain reads the real settings (paid models need price ceilings), so it is fixed here too.
         with patch('kb.providers.settings',return_value=cfg), patch('kb.providers.record_diagnostic'), \
+             patch('kb.providers.model_chain',return_value=['one','two']), \
              patch('kb.providers._image_data_url',return_value='synthetic-image'), \
              patch('kb.providers.model_request',side_effect=[invalid,invalid,valid]) as send:
             self.assertEqual(describe_visual(b'image','table')['visible_text'], ['FY25 | 100'])

@@ -134,6 +134,9 @@ def main():
     reindex = sub.add_parser('reindex', help='Rebuild OpenSearch from already-approved curated objects; no new files or approvals.')
     reindex.add_argument('--folder')
     reindex.add_argument('--limit', type=int, default=1000)
+    entities = sub.add_parser('entities', help='Entity scan of one folder: main entities, type checks and document kinds (local GLiNER2.5).')
+    entities.add_argument('--folder', required=True)
+    entities.add_argument('--by', default='cli', help='Employee id recorded as the one who started the scan.')
     sub.add_parser('worker')
     sub.add_parser('archive')
     recovery = sub.add_parser('recover', help='Fail only exact interrupted requests after all workers are stopped; new checker approval required.')
@@ -237,6 +240,20 @@ def main():
         print(json.dumps(result))
         if result['errors']:
             raise SystemExit(1)
+    elif args.command == 'entities':
+        from kb.db import EntityScan
+        from kb.entities import ScanError, run_scan, start_scan
+        try:
+            with db_session() as db:
+                scan_id = start_scan(db, args.folder, args.by).id
+        except ScanError as exc:
+            raise SystemExit(str(exc))
+        run_scan(scan_id)  # in this process; progress is on the Knowledge graph page
+        with db_session() as db:
+            scan = db.get(EntityScan, scan_id)
+            print(json.dumps({'status': scan.status, 'error': scan.error, 'counts': scan.counts}))
+            if scan.status != 'done':
+                raise SystemExit(1)
     elif args.command == 'worker':
         print('Worker running. Press Ctrl-C to stop.')
         try:

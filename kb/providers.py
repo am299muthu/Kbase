@@ -37,8 +37,7 @@ def record_diagnostic(kind: str, model=None, status=None, response=None) -> None
     if len(entries) >= 40:
         entries.pop(0)  # Keep the final failure, even after many successful fallbacks.
     text = response if isinstance(response, str) else json.dumps(response, default=str) if response is not None else ''
-    key = settings().openrouter_api_key
-    if key:
+    for key in _model_keys(settings()):
         text = text.replace(key, '[redacted]')
     entries.append({'kind': kind, 'model': model, 'http_status': status, 'response': text[:1500],
                     'truncated': len(text) > 1500, 'at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())})
@@ -58,6 +57,30 @@ class ModelQuotaError(ModelHTTPError):
 
 class InvalidVisionOutput(ModelUnavailable):
     """A completed model request produced unusable structured output."""
+
+
+MODEL_ROLES = ('answer', 'planner', 'guardrail', 'vision', 'embedding', 'image_embedding')
+_ROLE_FALLBACK = {'planner': 'answer', 'guardrail': 'answer'}  # these share the answer model's endpoint when blank
+_OPENROUTER_ONLY = ('reasoning', 'provider')                  # request fields an internal server may reject
+
+
+def _model_keys(cfg) -> list[str]:
+    keys = [getattr(cfg, 'openrouter_api_key', '')] + [getattr(cfg, f'{role}_model_key', '') for role in MODEL_ROLES]
+    return [key for key in keys if key]
+
+
+def model_endpoint(cfg, role: str, path: str, suffix: str) -> tuple[str, str]:
+    """(base URL, key) for one model role: its own endpoint (ROLE_MODEL_URL / ROLE_MODEL_KEY) when set,
+    then its fallback role's, else the shared OPENROUTER_* gateway."""
+    chain = [role, _ROLE_FALLBACK.get(role)]
+    key = next((getattr(cfg, f'{name}_model_key', '') for name in chain if name and getattr(cfg, f'{name}_model_key', '')),
+               getattr(cfg, 'openrouter_api_key', ''))
+    for name in chain:
+        url = getattr(cfg, f'{name}_model_url', '') if name else ''
+        if url:
+            url = url.rstrip('/')
+            return (url[:-len(suffix)] if url.endswith(suffix) else url), key
+    return cfg.openrouter_base_url.rstrip('/') + '/' + path[:-len(suffix)].strip('/'), key
 
 
 def _price_ceiling(model: str, resource: str) -> dict:
@@ -83,7 +106,7 @@ def run_model_chain(models: list[str], attempt, *, what: str):
     for index, model in enumerate(models):
         try:
             result = attempt(model)
-            if not model.endswith(':free'):
+            if not model.endswith(':free') and getattr(settings(), 'model_api', 'openrouter') == 'openrouter':
                 record_diagnostic('paid_model_used', model, 200, f'{what}: all earlier free models failed')
             return result
         except ModelHTTPError as exc:
@@ -98,24 +121,35 @@ def run_model_chain(models: list[str], attempt, *, what: str):
 
 
 @traced('model.request')
-def model_request(path: str, payload: dict, retries: int) -> dict:
+def model_request(path: str, payload: dict, retries: int, role: str | None = None) -> dict:
+    """One OpenAI-compatible request for a model role (answer, planner, guardrail, vision, embedding,
+    image_embedding). `path` says which kind of request it is; the role picks the endpoint."""
     from opentelemetry import trace
     trace.get_current_span().set_attribute('gen_ai.request.model', payload.get('model', 'unknown'))
     cfg = settings()
-    if not cfg.external_models_enabled or not cfg.openrouter_api_key:
-        raise ModelUnavailable('External model processing is disabled or OPENROUTER_API_KEY is missing.')
-    if not cfg.openrouter_base_url.startswith('https://'):
-        raise ModelUnavailable('External model gateway requires HTTPS.')
-    from kb.processing_context import check_transfer_approval
     if path == cfg.openrouter_chat_path and path.endswith('/chat/completions'):
         resource, suffix = 'chat', '/chat/completions'
     elif path == cfg.openrouter_embedding_path and path.endswith('/embeddings'):
         resource, suffix = 'embeddings', '/embeddings'
     else:
         raise ModelUnavailable('Unsupported OpenAI-compatible endpoint path.')
-    base_url = cfg.openrouter_base_url.rstrip('/') + '/' + path[:-len(suffix)].strip('/')
+    role = role or ('answer' if resource == 'chat' else 'embedding')
+    if role not in MODEL_ROLES:
+        raise ModelUnavailable(f'Unknown model role {role}.')
+    internal = getattr(cfg, 'model_api', 'openrouter') == 'openai'
+    base_url, api_key = model_endpoint(cfg, role, path, suffix)
+    if not cfg.external_models_enabled or (not api_key and not internal):
+        raise ModelUnavailable(f'External model processing is disabled, or no key is set for the {role} model '
+                               f'({role.upper()}_MODEL_KEY or OPENROUTER_API_KEY).')
+    if not base_url.startswith('https://'):
+        raise ModelUnavailable('External model gateway requires HTTPS.')
+    from kb.processing_context import check_transfer_approval
     extra_body = {key: value for key, value in payload.items() if key not in {'model', 'messages', 'input'}}
-    extra_body['provider'] = {'allow_fallbacks': False, 'max_price': _price_ceiling(payload['model'], resource)}
+    if internal:  # plain OpenAI-compatible request: no OpenRouter routing, reasoning or price fields
+        for key in _OPENROUTER_ONLY:
+            extra_body.pop(key, None)
+    else:
+        extra_body['provider'] = {'allow_fallbacks': False, 'max_price': _price_ceiling(payload['model'], resource)}
     retries = max(0, min(retries, 3))
     for attempt in range(retries + 1):
         check_transfer_approval()
@@ -123,7 +157,7 @@ def model_request(path: str, payload: dict, retries: int) -> dict:
         try:
             # Keep retries here so every attempt rechecks approval and reports progress.
             # Explicit key/base URL prevent ambient OpenAI settings changing the destination.
-            with OpenAI(api_key=cfg.openrouter_api_key, base_url=base_url,
+            with OpenAI(api_key=api_key or 'not-needed', base_url=base_url,
                         timeout=cfg.model_timeout_seconds, max_retries=0,
                         http_client=httpx.Client(timeout=cfg.model_timeout_seconds,
                                                  trust_env=False, follow_redirects=False)) as client:
@@ -161,8 +195,16 @@ def model_request(path: str, payload: dict, retries: int) -> dict:
     raise ModelUnavailable('Model gateway retry limit reached.')
 
 
-def embeddings(texts: list[str]) -> list[list[float]]:
+def embeddings(texts: list[str], kind: str = 'passage') -> list[list[float]]:
+    """Vectors for `texts`. `kind` is 'query' for a search question; only the local model uses it."""
     cfg = settings()
+    if cfg.embedding_backend == 'local':
+        from kb.local_embeddings import LocalEmbeddingError, embed
+        try:
+            with measure('embedding_local'):
+                return embed(texts, kind)
+        except LocalEmbeddingError as exc:
+            raise ModelUnavailable(str(exc)) from exc
     if cfg.embedding_backend == 'openrouter':
         safe_texts = texts
         report_progress('text_embeddings', completed=0, total=len(texts))
@@ -170,7 +212,7 @@ def embeddings(texts: list[str]) -> list[list[float]]:
         if 'qwen3-embedding' in cfg.openrouter_embedding_model:
             payload['dimensions'] = cfg.embedding_dimensions  # MRL: 32-4096; native size is 4096
         with measure('embedding_api'):
-            result = model_request(cfg.openrouter_embedding_path, payload, cfg.e_retry)
+            result = model_request(cfg.openrouter_embedding_path, payload, cfg.e_retry, role='embedding')
         return _validated_vectors(result, len(texts), cfg.embedding_dimensions)
     vectors = []
     for text in texts:
@@ -240,7 +282,7 @@ def image_embeddings(images: list[bytes]) -> list[list[float]]:
     inputs = [{'content': [{'type': 'image_url', 'image_url': {'url': _image_data_url(data)}}]} for data in images]
 
     def attempt(model):
-        result = model_request(cfg.openrouter_embedding_path, {'model': model, 'input': inputs}, cfg.e_retry)
+        result = model_request(cfg.openrouter_embedding_path, {'model': model, 'input': inputs}, cfg.e_retry, role='image_embedding')
         return _validated_vectors(result, len(images), cfg.image_embedding_dimensions)
     return run_model_chain(model_chain(cfg.openrouter_image_embedding_model), attempt, what='image embedding')
 
@@ -252,7 +294,7 @@ def image_query_embedding(query: str) -> list[float]:
     safe_query = query
 
     def attempt(model):
-        result = model_request(cfg.openrouter_embedding_path, {'model': model, 'input': [safe_query]}, cfg.e_retry)
+        result = model_request(cfg.openrouter_embedding_path, {'model': model, 'input': [safe_query]}, cfg.e_retry, role='image_embedding')
         return _validated_vectors(result, 1, cfg.image_embedding_dimensions)[0]
     return run_model_chain(model_chain(cfg.openrouter_image_embedding_model), attempt, what='image embedding')
 
@@ -302,7 +344,7 @@ def describe_visual(data: bytes, object_kind: str) -> dict:
             body['messages'] = [*payload['messages'][:-1], {'role': 'user', 'content': [
                 *payload['messages'][-1]['content'], {'type': 'text', 'text': instruction}]}]
             body['temperature'] = 0
-        result = model_request(cfg.openrouter_chat_path, body, cfg.i_retry)
+        result = model_request(cfg.openrouter_chat_path, body, cfg.i_retry, role='vision')
         try:
             choice = result['choices'][0]
             if choice.get('finish_reason') not in (None, 'stop'):
@@ -368,7 +410,7 @@ def plan_questions(message: str) -> list[tuple[str, str]]:
             'model': model, 'temperature': 0, 'max_tokens': 2400, 'reasoning': {'enabled': False},
             'response_format': {'type': 'json_object'}, 'messages': [
                 {'role': 'system', 'content': instruction}, {'role': 'user', 'content': safe}]
-        }, cfg.i_retry)
+        }, cfg.i_retry, role='planner')
         try:
             choice = result['choices'][0]
             if choice.get('finish_reason') not in (None, 'stop'):
@@ -385,7 +427,8 @@ def plan_questions(message: str) -> list[tuple[str, str]]:
         except (KeyError, TypeError, IndexError, ValueError, AttributeError) as exc:
             raise ModelUnavailable('The planner returned an incomplete or invalid question plan.') from exc
 
-    return run_model_chain(model_chain(cfg.openrouter_model), attempt, what='question planning')
+    return run_model_chain(model_chain(getattr(cfg, 'planner_model', '') or cfg.openrouter_model), attempt,
+                           what='question planning')
 
 
 class AnswerValidationError(ModelUnavailable):
@@ -414,7 +457,7 @@ def synthesize(question: str, evidence: list[dict], correction: bool = False) ->
             'report you are quoting. Return insufficient=true if no claim is supported.')
 
     def attempt(model):
-        result = model_request(cfg.openrouter_chat_path, {**body, 'model': model}, cfg.i_retry)
+        result = model_request(cfg.openrouter_chat_path, {**body, 'model': model}, cfg.i_retry, role='answer')
         try:
             answer = json.loads(result['choices'][0]['message']['content'])
             if not isinstance(answer, dict) or not isinstance(answer.get('claims'), list) or type(answer.get('insufficient')) is not bool or answer['insufficient'] == bool(answer['claims']):

@@ -6,6 +6,65 @@ from pypdf.annotations import Rectangle, FreeText
 from pypdf.generic import ArrayObject, FloatObject, NameObject, NumberObject, TextStringObject
 
 
+def _markdown_table(text):
+    """Split Markdown into table rows and the lines around them (a caption, a note)."""
+    rows, other = [], []
+    for line in (text or '').splitlines():
+        stripped = line.strip()
+        if stripped.startswith('|'):
+            row = [cell.strip() for cell in stripped.strip('|').split('|')]
+            if not all(cell and set(cell) <= set('-: ') for cell in row):  # the |---|---| separator
+                rows.append(row)
+        elif stripped and not stripped.startswith(_READING_MARKERS):
+            other.append(stripped)
+    return rows, ' '.join(other)
+
+
+# The first line of a stored model reading, e.g. "[Chart data read by Granite Vision; ...]".
+_READING_MARKERS = ('[Chart data read by', '[Chart summary written by', '[Generated visual interpretation')
+
+
+def _without_marker(text):
+    lines = (text or '').splitlines()
+    if lines and lines[0].strip().startswith(_READING_MARKERS):
+        lines = lines[1:]
+    return '\n'.join(lines).strip()
+
+
+def extracted_data(parsed):
+    """The tables and chart data stored with a run, keyed by the object they came from, for the
+    object inspector. Tables are Docling's (structure from the layout model, cell text from the PDF);
+    charts are model readings (Granite). Reads the parsed record only; no model calls."""
+    captions = {}
+    for block in parsed.get('blocks', []):
+        meta = block.get('metadata') or {}
+        if block.get('kind') == 'image' and meta.get('object_id') and not meta.get('generated'):
+            captions[meta['object_id']] = (block.get('text') or '').split('] ', 1)[-1].strip(' []')
+    items = []
+    for block in parsed.get('blocks', []):
+        meta = block.get('metadata') or {}
+        object_id = meta.get('object_id')
+        if not object_id:
+            continue
+        if meta.get('generated') and meta.get('model'):
+            rows, _ = _markdown_table(block.get('text'))
+            caption = captions.get(object_id, '')
+            items.append({'object_id': object_id, 'page': block.get('page'), 'kind': 'chart', 'source': meta['model'],
+                          'generated': True, 'seconds': meta.get('model_seconds'), 'rows': rows,
+                          'caption': '' if caption.startswith('Picture:') else caption,
+                          'mode': meta.get('reading_mode') or ('table' if rows else 'text'),
+                          'check': meta.get('check'), 'note': meta.get('note'),
+                          'text': '' if rows else _without_marker(block.get('text'))})
+        elif block.get('kind') == 'table':
+            rows, caption = _markdown_table(block.get('text'))
+            if rows:
+                items.append({'object_id': object_id, 'page': block.get('page'), 'kind': 'table',
+                              'source': meta.get('extractor') or 'parser', 'generated': False, 'seconds': None,
+                              'rows': rows, 'caption': caption, 'mode': 'table', 'check': None, 'note': None,
+                              'text': ''})
+    return items
+
+
 def annotate_pdf(source, objects, layer='all'):
     if layer not in {'all', 'layout', 'crops'}:
         raise ValueError('Unknown geometry layer')

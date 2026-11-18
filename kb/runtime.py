@@ -10,15 +10,35 @@ from kb.search import _validate_vectors, client, index_for_document, retention_c
 from kb.storage import ObjectStore
 
 
+def _local_hybrid_readiness(cfg) -> dict:
+    """Opt-in local profile: OpenSearch on this machine with a local embedding model. Nothing is
+    sent out, so there is no external approval to verify; the index has to be reachable and match
+    the configured model. Documents not copied to it yet are reported, not treated as a failure."""
+    from kb.search import ensure_index
+    blocking, count = [], 0
+    try:
+        ensure_index()
+        count = client().count(index=cfg.opensearch_index)['count']
+    except Exception as exc:
+        blocking.append('The local ' + cfg.search_engine + ' node is not reachable or its index does not match the embedding model ('
+                        + type(exc).__name__ + '). Start it with scripts/windows/' + cfg.search_engine + '.ps1.')
+    return {'ready': not blocking, 'index': cfg.opensearch_index, 'blocking': blocking, 'verified_chunks': count}
+
+
 def check_hybrid_readiness() -> dict:
     cfg = settings()
+    if cfg.local_ingestion_enabled:
+        return _local_hybrid_readiness(cfg)
     blocking = []
     if cfg.search_backend != 'opensearch' or not cfg.opensearch_vector_search:
         blocking.append('OpenSearch hybrid retrieval is not enabled')
     if cfg.embedding_backend != 'openrouter' or cfg.llm_provider != 'openrouter':
-        blocking.append('Configured text embedding/inference adapters must use OpenRouter')
-    if not cfg.external_models_enabled or not cfg.openrouter_api_key or not cfg.guardrails_enabled:
-        blocking.append('Approved external processing, private key and guardrails are required')
+        blocking.append('Text embeddings and answers must use the model API (EMBEDDING_BACKEND=api, LLM_PROVIDER=api)')
+    # A key per model, the shared OPENROUTER_API_KEY, or an internal server that needs none.
+    keys_ready = (cfg.model_api == 'openai' or bool(cfg.openrouter_api_key)
+                  or (bool(cfg.answer_model_key) and bool(cfg.embedding_model_key)))
+    if not cfg.external_models_enabled or not keys_ready or not cfg.guardrails_enabled:
+        blocking.append('Approved external processing, model keys and guardrails are required')
     if cfg.storage_backend != 's3':
         blocking.append('Configure S3-compatible file storage; SQLite controls may remain')
     if blocking:

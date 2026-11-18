@@ -150,6 +150,141 @@ class LoginSession(Base):
     expires_at: Mapped[str] = mapped_column(String(40))
 
 
+class ProcessingSetting(Base):
+    """A processing time limit saved on the settings page; see kb.processing_limits."""
+    __tablename__ = 'processing_settings'
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[int] = mapped_column(Integer)
+    updated_by: Mapped[str] = mapped_column(String(64))
+    updated_at: Mapped[str] = mapped_column(String(40), default=now)
+
+
+class GraphBuild(Base):
+    """One run of the graph builder over a folder's chosen documents; see kb.graph_build."""
+    __tablename__ = 'graph_builds'
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    folder_id: Mapped[str] = mapped_column(ForeignKey('folders.id'), index=True)
+    status: Mapped[str] = mapped_column(String(20), default='queued')  # queued, running, done, failed
+    stage: Mapped[str] = mapped_column(String(80), default='')
+    started_by: Mapped[str] = mapped_column(String(64))
+    document_ids: Mapped[list] = mapped_column(JSON, default=list)
+    backend: Mapped[str] = mapped_column(String(40), default='')
+    ontology_version: Mapped[str] = mapped_column(String(20), default='')
+    counts: Mapped[dict] = mapped_column(JSON, default=dict)
+    error: Mapped[str] = mapped_column(Text, default='')
+    created_at: Mapped[str] = mapped_column(String(40), default=now)
+    finished_at: Mapped[str] = mapped_column(String(40), default='')
+
+
+class GraphNode(Base):
+    """An entity in a folder's graph, typed against the ontology. Visible only to that folder."""
+    __tablename__ = 'graph_nodes'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    folder_id: Mapped[str] = mapped_column(ForeignKey('folders.id'), index=True)
+    key: Mapped[str] = mapped_column(String(200), index=True)  # normalised label, stable across builds
+    label: Mapped[str] = mapped_column(Text)
+    node_type: Mapped[str] = mapped_column(String(40))
+    type_source: Mapped[str] = mapped_column(String(10), default='model')  # model, rule, human
+    document_ids: Mapped[list] = mapped_column(JSON, default=list)
+    build_id: Mapped[str] = mapped_column(String(32))
+
+
+class GraphLink(Base):
+    """A typed link between two nodes. Proposed until a checker approves it; only approved links are used in answers."""
+    __tablename__ = 'graph_links'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    folder_id: Mapped[str] = mapped_column(ForeignKey('folders.id'), index=True)
+    source_id: Mapped[str] = mapped_column(ForeignKey('graph_nodes.id'), index=True)
+    target_id: Mapped[str] = mapped_column(ForeignKey('graph_nodes.id'), index=True)
+    predicate: Mapped[str] = mapped_column(String(40))
+    relation: Mapped[str] = mapped_column(String(60), default='')  # graphify's own relation name
+    confidence: Mapped[str] = mapped_column(String(12), default='')  # EXTRACTED, INFERRED, AMBIGUOUS
+    score: Mapped[float] = mapped_column(default=0.0)
+    status: Mapped[str] = mapped_column(String(12), default='proposed')  # proposed, approved, rejected
+    reviewed_by: Mapped[str] = mapped_column(String(64), default='')
+    reviewed_at: Mapped[str] = mapped_column(String(40), default='')
+    review_note: Mapped[str] = mapped_column(Text, default='')
+    build_id: Mapped[str] = mapped_column(String(32))
+
+
+class GraphEvidence(Base):
+    """Where a link was found: the indexed chunk (and so the page) and the sentence that supports it."""
+    __tablename__ = 'graph_evidence'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    link_id: Mapped[str] = mapped_column(ForeignKey('graph_links.id'), index=True)
+    document_id: Mapped[str] = mapped_column(String(64))
+    chunk_id: Mapped[str] = mapped_column(String(80), default='')
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quote: Mapped[str] = mapped_column(Text, default='')
+
+
+class EntityScan(Base):
+    """One run of the entity scan over a folder's indexed documents; see kb.entities."""
+    __tablename__ = 'entity_scans'
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    folder_id: Mapped[str] = mapped_column(ForeignKey('folders.id'), index=True)
+    status: Mapped[str] = mapped_column(String(20), default='queued')  # queued, running, done, failed
+    stage: Mapped[str] = mapped_column(String(120), default='')
+    started_by: Mapped[str] = mapped_column(String(64))
+    document_ids: Mapped[list] = mapped_column(JSON, default=list)
+    model: Mapped[str] = mapped_column(String(80), default='')
+    ontology_version: Mapped[str] = mapped_column(String(20), default='')
+    counts: Mapped[dict] = mapped_column(JSON, default=dict)
+    error: Mapped[str] = mapped_column(Text, default='')
+    created_at: Mapped[str] = mapped_column(String(40), default=now)
+    finished_at: Mapped[str] = mapped_column(String(40), default='')
+
+
+class EntityMention(Base):
+    """An entity found in one chunk (a chunk tag), with the classifier's check of its type."""
+    __tablename__ = 'entity_mentions'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    folder_id: Mapped[str] = mapped_column(ForeignKey('folders.id'), index=True)
+    document_id: Mapped[str] = mapped_column(String(64), index=True)
+    chunk_id: Mapped[str] = mapped_column(String(80), index=True)
+    key: Mapped[str] = mapped_column(String(200), index=True)  # normalised label, as graph nodes use
+    label: Mapped[str] = mapped_column(Text)
+    entity_type: Mapped[str] = mapped_column(String(40))
+    confidence: Mapped[float] = mapped_column(default=0.0)       # the extractor's span confidence
+    type_check: Mapped[str] = mapped_column(String(12), default='')  # confirmed, disputed
+    agreement: Mapped[float] = mapped_column(default=0.0)        # classifier probability of entity_type
+    hint: Mapped[str] = mapped_column(String(40), default='')     # the classifier's own pick
+    scan_id: Mapped[str] = mapped_column(String(32))
+
+
+class DocumentEntity(Base):
+    """One of the few entities a document is mainly about, ranked, with its document-fit flag."""
+    __tablename__ = 'document_entities'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    folder_id: Mapped[str] = mapped_column(ForeignKey('folders.id'), index=True)
+    document_id: Mapped[str] = mapped_column(String(64), index=True)
+    key: Mapped[str] = mapped_column(String(200), index=True)
+    label: Mapped[str] = mapped_column(Text)
+    entity_type: Mapped[str] = mapped_column(String(40))
+    rank: Mapped[int] = mapped_column(Integer)
+    chunks: Mapped[int] = mapped_column(Integer)   # chunks of the document that mention it
+    score: Mapped[float] = mapped_column(default=0.0)
+    agreement: Mapped[float] = mapped_column(default=0.0)
+    fit: Mapped[str] = mapped_column(String(12), default='unchecked')  # expected, unexpected, unchecked
+    scan_id: Mapped[str] = mapped_column(String(32))
+
+
+class DocumentProfile(Base):
+    """The document kind the classifier chose, and the scan's counts for one document."""
+    __tablename__ = 'document_profiles'
+    document_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    folder_id: Mapped[str] = mapped_column(ForeignKey('folders.id'), index=True)
+    kind: Mapped[str] = mapped_column(String(40), default='')
+    kind_confidence: Mapped[float] = mapped_column(default=0.0)
+    kind_scores: Mapped[dict] = mapped_column(JSON, default=dict)
+    entities: Mapped[int] = mapped_column(Integer, default=0)
+    confirmed: Mapped[int] = mapped_column(Integer, default=0)
+    disputed: Mapped[int] = mapped_column(Integer, default=0)
+    unexpected: Mapped[int] = mapped_column(Integer, default=0)
+    scan_id: Mapped[str] = mapped_column(String(32))
+    scanned_at: Mapped[str] = mapped_column(String(40), default=now)
+
+
 class Audit(Base):
     __tablename__ = 'audit_events'
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -169,7 +304,7 @@ if cfg.database_url.startswith('sqlite'):
     @event.listens_for(engine, 'connect')
     def sqlite_settings(connection, _):
         connection.execute('PRAGMA foreign_keys=ON')
-        connection.execute('PRAGMA journal_mode=WAL')
+        connection.execute(f'PRAGMA journal_mode={cfg.sqlite_journal_mode.upper()}')  # SQLITE_JOURNAL_MODE
 
 Session = sessionmaker(engine, expire_on_commit=False)
 

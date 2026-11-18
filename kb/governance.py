@@ -28,6 +28,8 @@ class GovernanceError(ValueError):
 
 def require_hybrid_ingestion(title: str):
     cfg = settings()
+    if cfg.local_ingestion_enabled:
+        return  # offline demo: nothing leaves the machine, so there is no external transfer to approve
     if (cfg.search_backend != 'opensearch' or not cfg.opensearch_vector_search
             or cfg.embedding_backend != 'openrouter' or not cfg.external_models_enabled
             or not cfg.guardrails_enabled):
@@ -58,6 +60,18 @@ def processing_scope() -> dict:
         'llm_temperature', 'chunk_max_chars', 'chunk_overlap', 'retention_years',
     )
     config = {key: getattr(cfg, key, None) for key in fields}
+    if cfg.search_engine != 'opensearch':  # only then, so existing scope digests do not change
+        config['search_engine'] = cfg.search_engine
+    if cfg.embedding_backend == 'local':  # only then, so other profiles' scope digests do not change
+        config['local_embedding_model'] = cfg.local_embedding_model
+    # Where each API model is sent is part of what a checker approves. Only set values are added (never
+    # keys), so existing scope digests do not change.
+    if getattr(cfg, 'model_api', 'openrouter') != 'openrouter':
+        config['model_api'] = cfg.model_api
+    for key in ('planner_model', 'answer_model_url', 'planner_model_url', 'guardrail_model_url', 'vision_model_url',
+                'embedding_model_url', 'image_embedding_model_url'):
+        if getattr(cfg, key, ''):
+            config[key] = getattr(cfg, key)
     # These parser flags are read directly from the environment, not Settings.
     parser_defaults = {
         'PDF_PARSER': 'pypdf', 'OCR_ENABLED': 'false', 'OCR_LANGUAGE': 'eng',

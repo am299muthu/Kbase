@@ -199,12 +199,26 @@ async def answer_question(token: str, message: str, top_k: int = 5) -> dict:
                         answer = '\n\n'.join(lines)
                     else:
                         # No invented synthesis: clearly labelled verbatim evidence with stable citations.
-                        lines = ['Local evidence excerpts (no generative model used):']
+                        lines = ['Matching passages:']
                         for item in resolved:
                             excerpt = item['text'][:1200]
                             lines.append(f"{excerpt}\n[{item['id']}]")
                             used.append(item['id'])
                         answer = '\n\n'.join(lines)
+                    # Approved knowledge-graph links about entities in the question, each cited by its passage.
+                    if 'graphfacts' in available:
+                        found_facts = await call('graphfacts', {'query': question})
+                        fact_lines = []
+                        for fact in found_facts.get('facts', []):
+                            if fact['chunk_id'] not in by_id:
+                                section = await call('getdocsection', {'chunk_id': fact['chunk_id']})
+                                if not section.get('section'):
+                                    continue
+                                by_id[fact['chunk_id']] = section['section']
+                            fact_lines.append(f"- {fact['source']} {fact['predicate'].replace('_', ' ')} {fact['target']} [{fact['chunk_id']}]")
+                            used.append(fact['chunk_id'])
+                        if fact_lines:
+                            answer += '\n\nApproved links in the knowledge graph:\n' + '\n'.join(fact_lines)
                     citations = [{'id': ref, 'document_id': by_id[ref]['document_id'], 'title': by_id[ref]['title'],
                                   'section': by_id[ref]['section'], 'page': by_id[ref].get('page'), 'pages': by_id[ref].get('pages', []),
                                   'snippet': by_id[ref]['text'][:1200], 'source_uri': by_id[ref]['source_uri']} for ref in dict.fromkeys(used)]

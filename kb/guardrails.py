@@ -20,7 +20,7 @@ def _judge(instruction: str, data: dict, max_tokens: int = 4096, validate=None) 
     }
 
     def attempt(model):
-        result = model_request(cfg.openrouter_chat_path, {**body, 'model': model}, cfg.i_retry)
+        result = model_request(cfg.openrouter_chat_path, {**body, 'model': model}, cfg.i_retry, role='guardrail')
         try:
             choice = result['choices'][0]
             if choice.get('finish_reason') not in (None, 'stop'):
