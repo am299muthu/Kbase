@@ -61,6 +61,19 @@ No ad-hoc safe overrides are needed. The verified running profile is **SQLite co
 
 No real PDF enrichment/reprocessing or live hybrid corpus is claimed by this update.
 
+## Model endpoints in the approval scope (2026-11-18)
+
+Each API model can now have its own endpoint ([one endpoint per model](openrouter-activation.md#one-endpoint-per-model)).
+When a model's link is set, the link (never its key) is recorded in the processing scope a checker
+approves, alongside `MODEL_API` when it is not `openrouter`. Pointing a model at a different
+destination therefore invalidates approvals made for the old one. With all links blank, scope
+digests are unchanged, so existing approvals stay valid.
+
+`MODEL_API=openai` drops OpenRouter's zero-price ceilings and provider routing, because an internal
+model server has neither. Cost and capacity controls then belong to that server. Hybrid mode still
+requires approved external processing, guardrails, and S3-compatible storage before it starts; the
+CML profile meets the storage rule with Garage.
+
 ## Remaining security/operational limits
 
 External model transfers require approved scope. Grounding verdicts are fallible and need evaluation.

@@ -21,7 +21,9 @@ uses blank page outlines and does not expose original unredacted PDF content.
 
 ## Validate against the original PDF
 
-Open **Ingestion monitor → Details → Open PDF inspector**. The dedicated page
+In the **Ingestion monitor**, choose the **PDF inspector** button on a PDF's row (or
+**Details → Open PDF inspector**). The inspector has no sidebar link; while it is open the
+Ingestion monitor stays highlighted, and **Back to ingestion** returns there. The dedicated page
 renders the retained source PDF locally, then draws selectable SVG boxes over it.
 Use the page selector, 100–200% zoom, and layer selector (all, Docling layout,
 processing crops, or original only). Click a box or its object-list entry to

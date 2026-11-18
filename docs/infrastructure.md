@@ -29,6 +29,20 @@ Security and k-NN 3.9.0.0 are now installed and locally verified. OpenSearch use
 
 Use an existing reviewed local PostgreSQL installation. For a fresh developer instance, create a non-superuser login and dedicated database using `createuser --pwprompt kb` and `createdb --owner=kb kbase` (authenticate as your local administrator). Set `DATABASE_URL=postgresql+psycopg://kb:YOUR_URL_ENCODED_PASSWORD@localhost:5432/kbase`. Do not use the example password. The prototype bootstraps schema via SQLAlchemy; production requires reviewed migrations, backups, connection pooling and separate migration/application roles.
 
+## SQLite on a network disk
+
+SQLite runs in WAL mode by default (`SQLITE_JOURNAL_MODE=wal`), which needs shared memory that
+network file systems do not provide reliably. On such a disk, for example a CML project disk, set
+`SQLITE_JOURNAL_MODE=delete`. The CML profile does this.
+
+## CML (Cloudera Machine Learning)
+
+KBase can run as a CML Application with Garage for files, OpenSearch for search, SQLite for the
+controls database on the project disk, Docling and GLiNER in the Application, and the bank's model
+endpoints for everything else. CML has no Docker, so the launcher starts Garage and OpenSearch from
+their Linux binaries inside the Application when configured. See [CML setup](../scripts/cml/README.md)
+and the [readiness check](cml-readiness.md).
+
 ## S3 / LocalStack
 
 Point `S3_ENDPOINT_URL` at an **already running** LocalStack S3 endpoint (normally `http://localhost:4566`). LocalStack itself is not bundled or started; its usual local runtime uses Docker, so do not assume its Python CLI supplies a container-free emulator. A remote approved LocalStack endpoint or another S3-compatible store may be used when Docker is prohibited. For AWS S3, leave the endpoint blank, use appropriate IAM credentials, and provision encryption/KMS, Object Lock, lifecycle and retention policies separately. The app enables bucket versioning/public-access blocking on buckets it creates; it does not claim KMS or WORM configuration is present.

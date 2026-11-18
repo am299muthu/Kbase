@@ -2,7 +2,19 @@
 
 **Latest rollout (2026-10-28):** Hybrid search is active: the original ten rebuilt PDFs have 273 verified vector chunks. All new uploads and ingestion requests require BM25 + real embeddings; PDFs also require native text parsing and VL image processing. SQLite stores controls and Garage stores files. Five later PDFs failed hybrid reprocessing (four guardrail failures, one VL-output failure); their old generations were preserved. The **Ingestion monitor** shows steps, progress, request history and captured errors. See [current batch and processing policy](docs/pdf-pilot-rebuild.md).
 
-A local enterprise knowledge-base prototype with governed document onboarding, folder-entitled retrieval, citations, evidence grounding, and five real MCP tools. All bundled policy and employee examples are **synthetic**. This is not a production banking system.
+A local enterprise knowledge-base prototype with governed document onboarding, folder-entitled retrieval, citations, evidence grounding, and real MCP tools. All bundled policy and employee examples are **synthetic**. This is not a production banking system.
+
+## Added on the `cml-poc` branch (2026-11-18)
+
+| Area | What it does | Read more |
+|---|---|---|
+| Knowledge graph | A graph per folder, typed against [the ontology](ontology/kbase-ontology.yaml), with a review queue; only approved links reach answers (MCP tool `graphfacts`). Built by GLiNER2.5 on the machine (`KBASE_GRAPH_EXTRACTOR=gliner`) or by graphify with an LLM. | [Ontology design](docs/ontology-design.md), [graph build](docs/graph-build/) |
+| Entity scan | Each document's main entities, chunk tags, a classifier check of every entity's type, the document's kind and flags for entities that do not fit it. **Main entities** tab on the Knowledge graph page; `kb.cli entities --folder <id>`. Tags raise matching passages in search. | `kb/entities.py` |
+| Local hybrid search | OpenSearch (or Elasticsearch 8) keyword plus vector search with a local embedding model, and local Docling + Granite parsing, for the offline Windows profile. | [Windows local](docs/windows-local.md), [pipeline diagram](docs/pipeline/) |
+| Model endpoints | One OpenAI-compatible endpoint per API model (`ANSWER_`, `PLANNER_`, `GUARDRAIL_`, `VISION_`, `EMBEDDING_`, `IMAGE_EMBEDDING_MODEL_URL` / `_KEY`), with `MODEL_API=openai` for internal model servers. | [Model settings](docs/openrouter-activation.md#one-endpoint-per-model), `.env.example` |
+| Processing | One-hour limit per document attempt in a supervised worker process; processing time limits page for developers. | [Ingestion](docs/ingestion.md#processing-time-limits) |
+| CML | Settings profile, install step and Application launcher for running KBase on CML with Garage, OpenSearch and the bank's model endpoints. | [CML setup](scripts/cml/README.md), [readiness check](docs/cml-readiness.md) |
+| UI | Red theme, two-panel login page that fits the window, PDF inspector opened from the Ingestion monitor. | [PDF inspector](docs/pdf-layout-debug.md) |
 
 ## Quick start
 
@@ -82,6 +94,8 @@ Application model calls use the OpenAI Python SDK (`OpenAI`) with the configured
 
 `.env` selects a named `local` or pending `hybrid` runtime profile. Individual flags do not override that profile's gates. The requested external provider is **OpenRouter**; model IDs/dimensions and the rotated API key stay in private `.env`. The compatible multimodal index is now provisioned, but real vectors and current checker/transfer approvals must be verified before selecting hybrid. `serve` refuses an unready hybrid corpus. Requested free-tier model IDs are configuration defaults, **not a guarantee of availability, zero cost, quotas, or measured quality**. See [rollout procedure](docs/governance-and-activation.md).
 
+Internal model servers work the same way: each API model can have its own OpenAI-compatible link and key (`*_MODEL_URL`, `*_MODEL_KEY`), and `MODEL_API=openai` leaves out the OpenRouter routing and price fields. See [one endpoint per model](docs/openrouter-activation.md#one-endpoint-per-model).
+
 **Security action:** the original requirement material exposed an API credential. Revoke/rotate it with the provider; never copy it into configuration, screenshots, logs, or repository history. This documentation does not reproduce it. Provider requests are masked by default; do not enable `ALLOW_UNMASKED_EXTERNAL` without approved data-processing governance.
 
 ### Hybrid PDF extraction and separate image embeddings
@@ -100,6 +114,7 @@ The PDF parser is `docling_hybrid`: **pypdf text + pdfplumber searchable grid-ta
 .venv/bin/python -m kb.cli worker
 .venv/bin/python -m kb.cli archive
 .venv/bin/python -m kb.cli recover
+.venv/bin/python -m kb.cli entities --folder finance   # entity scan of one folder (GLiNER2.5, local)
 ```
 
 CLI `--auto-approve` and operator-supplied `--checker` are now rejected. Onboarding stages a maker request; a separately authenticated checker must review the exact source hash/version and processing/transfer scope. The web process runs an approved-request worker. Existing documents must use exact-ID reprocessing requests rather than another corpus-directory import.
@@ -157,7 +172,7 @@ Remaining employees are readers. Each employee initially has only their own root
 ## Evaluation and demonstration
 
 - [50 manual evaluation cases and rubric](evaluation/README.md): expected answers/tools, safety checks, and full-evaluation protocol. [Limited local smoke measurements](evaluation/smoke-measurements.json) cover 16 selected cases (p50 578.81 ms; nearest-rank p95 601.51 ms), not full quality/entailment scores; Q041 has a documented no-evidence handling failure.
-- [Demo guide](docs/demo-guide.md): four tasks, MCP traces, maker-checker walkthrough, and multi-document/multi-format evidence checks.
+- [Demo guide](docs/demo-guide.md): four tasks, MCP traces, maker-checker walkthrough, multi-document/multi-format evidence checks, and the knowledge graph and main entities.
 - [OpenSearch Dashboards and query-latency setup](docs/opensearch-observability.md),
 - [Functional coverage and gaps](requirements.md), [architecture and design](design-and-evaluation.md), [AI tooling](ai-tooling.md), [deployment status](deployed.md).
 - [Architecture PNG including access control](docs/architecture-access-control/architecture.png), [editable diagrams.net XML](docs/architecture-access-control/architecture.xml), and [role matrix / trust boundaries / flows](docs/architecture-and-access-control.md). Generate with `.venv/bin/python scripts/render_architecture.py --output-dir docs/architecture-access-control` using Pillow; this is an asset generator, not a test runner. Historical `docs/architecture.*` and root-level submission copies are preserved.

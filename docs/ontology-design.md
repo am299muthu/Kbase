@@ -92,7 +92,7 @@ which keeps cost close to plain search indexing.
 Built into KBase on 2026-11-11: the **Knowledge graph** page, `kb/graph_build.py`,
 `kb/ontology.py`, tables `graph_builds`, `graph_nodes`, `graph_links`,
 `graph_evidence`, and the `/api/graph/...` endpoints. No business-domain rules
-yet: the ontology (0.2.0) has generic types (Organisation, Person, Product,
+yet: the ontology (0.2.0 then; 0.3.0 now, see below) has generic types (Organisation, Person, Product,
 Policy, Rule, Process, Metric, Event, Location, Term) and 17 predicates.
 
 How a build runs (one folder, chosen indexed documents):
@@ -126,6 +126,51 @@ Still open: graphify output varies between runs when the cache is cleared; the
 annual report (2,469 chunks) is unticked by default because a build would take
 30 minutes or more and many model calls; the ontology needs department input
 before predicates mean business rules.
+
+## Building the graph with GLiNER2.5 instead (no LLM)
+
+Added 2026-11-17. With `KBASE_GRAPH_EXTRACTOR=gliner` (the Windows profile's default), steps 2
+and 3 above become one local pass of GLiNER2.5 (`fastino/gliner2.5-base-v1`, Apache 2.0) in
+the Docling Python (`kb/gliner_extract.py`, `scripts/gliner/worker.py`). Its labels are the
+ontology's own types and predicates, so there is no alignment call, and nothing leaves the machine.
+
+- Types used: Organisation, Person, Product, Policy, Process, Metric, Event, Location. Left out on
+  purpose: Rule (a whole sentence, not a name) and Term (the catch-all).
+- Predicates used: `owned_by`, `part_of`, `located_in`, `measures`, `occurs_in`, `governed_by`,
+  `applies_to`, `supersedes`, each limited to the head and tail types its description allows. The
+  structural and vague predicates (`contains`, `mentions`, `related_to`, ...) are not extracted.
+- Results are cached per chunk (model, schema and text), so a rebuild reads only new chunks.
+- A link needs confidence 0.85 or more (`KBASE_GLINER_LINK_MIN`) and both entities' final types
+  must fit its predicate. On the Finance folder (75 documents, 14,070 chunks, 154 minutes on a
+  laptop GPU) that gave 538 links, about three in four right in a random sample; at 0.3 most were
+  wrong. Links still start as proposed and go through review.
+
+## Entity scan: main entities, checked by a second model
+
+Added 2026-11-18 (`kb/entities.py`, **Main entities** tab, `kb.cli entities --folder <id>`). It
+reuses the GLiNER cache above and adds GLiNER2.5's classifier:
+
+1. **Type check.** The classifier reads each entity in up to three sentences and gives the
+   probability of every type. An entity is *confirmed* when it agrees with the extracted type and
+   *disputed* otherwise; nothing is retyped. On a Finance sample, confirmed entities were right
+   about 17 times in 20, disputed ones about half the time.
+2. **Document kind.** The classifier reads the title and the first three chunks and picks one of
+   the ontology's `DocumentKind` values (75 of 75 Finance documents right with the current wording).
+3. **Main entities.** Per document, up to 10 confirmed entities, ranked by the chunks that mention
+   them and weighted down when most documents in the folder mention them too. Dates and quarters
+   are left out.
+4. **Document fit.** A main entity whose type is not among its kind's `expected_types` is flagged
+   for people to look at, never dropped.
+5. **Search.** Confirmed entities become chunk tags. In OpenSearch they are an `entities` keyword
+   field; a question naming one raises those passages, and each search result lists them.
+
+### Ontology 0.3.0
+
+Version 0.3.0 adds the `DocumentKind` enum: annual report, financial statements, results release,
+market research note, securities offering, presentation, policy or procedure, and other. Each has a
+`title` and `description` (what the classifier reads; no brackets allowed) and `expected_types`.
+The kinds, their wording and their expected types are a **draft** for the demo folders, for
+departments to correct.
 
 ### Earlier offline scripts (superseded by the app)
 
